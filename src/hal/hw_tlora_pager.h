@@ -126,7 +126,9 @@
 #define AUDIO_DAC_I2S_DOUT         45
 #define AUDIO_DAC_I2S_DIN          17
 #define AUDIO_DAC_I2S_MCLK         10
-#define AUDIO_AMP_SETTLE_MS          8
+// Class-D output stage soft-start; 8ms was too short and clipped the first
+// note (compare SQUARE's 250ms). 50ms settles the amp without much latency.
+#define AUDIO_AMP_SETTLE_MS         50
 
 // ── Battery — BQ25896 charger IC via I2C; no dedicated ADC pin ───────────────
 // Voltage is read from the BQ25896 ADC register over I2C (battery_util.cpp).

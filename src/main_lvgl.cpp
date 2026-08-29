@@ -2544,18 +2544,22 @@ namespace {
 static bool sPagerAudioInitTried = false;
 static bool sPagerAudioReady = false;
 static constexpr i2s_port_t kPagerI2SPort = I2S_NUM_0;
-static constexpr uint8_t kPagerAudioVolActive = 50;
-static constexpr uint8_t kPagerAudioVolIdle = 10;
+// ES8311 REG32 is an ATTENUATION register (0x00 = loudest, larger = quieter),
+// but the audio-driver lib's setVoiceVolume() maps a larger user volume to a
+// larger register value — inverted — and tops out ~27dB below max even at 100.
+// Bypass it: write the gain directly and keep it fixed; the mute bit handles
+// silence and notifyVolumeScale() handles user volume in the digital domain.
+static constexpr uint8_t kPagerCodecGain = 0x10;  // ~-6dB: loud but no clipping
 static constexpr float kPagerToneAmplitude = 7800.0f;
-static uint8_t sPagerAudioVolume = 0xFF;
 static audio_driver::DriverPins sPagerAudioPins;
 static audio_driver::AudioBoard sPagerAudioBoard(audio_driver::AudioDriverES8311,
                                                  sPagerAudioPins);
 
-static inline void pagerAudioApplyVolume(uint8_t volume) {
-    if (sPagerAudioVolume == volume) return;
-    sPagerAudioBoard.setVolume(volume);
-    sPagerAudioVolume = volume;
+static void pagerAudioSetCodecGain() {
+    Wire.beginTransmission(AUDIO_CODEC_ADDR);
+    Wire.write(0x32);  // ES8311 DAC volume (attenuation)
+    Wire.write(kPagerCodecGain);
+    Wire.endTransmission();
 }
 
 // Gate the speaker power amp. It stays off while idle so power-supply
@@ -2674,8 +2678,7 @@ static bool pagerAudioEnsureReady() {
         return false;
     }
 
-    sPagerAudioVolume = 0xFF;
-    pagerAudioApplyVolume(kPagerAudioVolIdle);
+    pagerAudioSetCodecGain();
     // Stay muted while idle: an unmuted DAC sitting between sounds emits random
     // DC-offset clicks/snaps. We unmute only while a tone is actually playing.
     sPagerAudioBoard.setMute(true);
@@ -2695,8 +2698,8 @@ static inline void pagerAudioStartPlayback() {
     // Power the speaker amp and let the class-D output stage settle before audio.
     pagerAudioSetAmp(true);
     delay(AUDIO_AMP_SETTLE_MS);
-    // Raise the gain while still muted so the analog volume step is inaudible.
-    pagerAudioApplyVolume(kPagerAudioVolActive);
+    // Codec gain is fixed; apply it (while still muted) right before playback.
+    pagerAudioSetCodecGain();
     i2s_zero_dma_buffer(kPagerI2SPort);
     // Prime codec/I2S with a short silent pre-roll so the first note isn't clipped.
     int16_t preRoll[256] = {0};
@@ -2708,15 +2711,18 @@ static inline void pagerAudioStartPlayback() {
 }
 
 static inline void pagerAudioStopPlayback() {
-    // Push a short silence tail before ending to reduce stop pops.
-    int16_t tail[1024] = {0};
+    // Push a silence tail deep enough to flush the DMA ring (6 x 256 frames =
+    // ~35ms at 44.1kHz stereo) BEFORE muting, otherwise queued tone samples are
+    // zeroed mid-note and every tone sounds audibly short. 2048 frames covers
+    // the full ring with margin.
+    static int16_t tail[2048 * 2] = {0};
     size_t tailWritten = 0;
-    (void)i2s_write(kPagerI2SPort, tail, sizeof(tail), &tailWritten, 20 / portTICK_PERIOD_MS);
-    // Mute while the output is silent, then drop the gain (now inaudible) and
-    // leave the DAC muted for idle so it can't emit stray clicks between sounds.
+    (void)i2s_write(kPagerI2SPort, tail, sizeof(tail), &tailWritten,
+                    60 / portTICK_PERIOD_MS);
+    // Mute while the output is silent, then leave the DAC muted for idle so it
+    // can't emit stray clicks between sounds. Codec gain stays where it was.
     sPagerAudioBoard.setMute(true);
     i2s_zero_dma_buffer(kPagerI2SPort);
-    pagerAudioApplyVolume(kPagerAudioVolIdle);
     pagerAudioSetAmp(false);  // power down the amp for idle → no idle snaps
 }
 
