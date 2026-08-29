@@ -1281,6 +1281,19 @@ void TDeckKeyboard::pumpCardputerKeys() {
         enqueueCardputerKey(status.fn ? KEY_BACKSPACE_HOLD : KEY_BACKSPACE);
     }
 
+    // Fn+Space (IME CN/EN toggle) cannot be seen in status.word: the library's
+    // fn-layer pass (Keyboard_Class::updateKeysState) scans the value_third
+    // codes while Fn is held and returns early, leaving `word` empty — so the
+    // word loop below can never find ' ' under Fn. Query the raw key list
+    // instead: the space key's value_first is ' ' in every modifier layer, so
+    // isKeyPressed(' ') stays true while it is physically held, Fn or not.
+    // Reached only when the key-list size changed (gate above), so one press
+    // enqueues exactly one toggle; releasing space or Fn re-enters here but
+    // the chord is gone, so nothing re-fires.
+    if (status.fn && M5Cardputer.Keyboard.isKeyPressed(' ')) {
+        enqueueCardputerKey(KEY_IME_TOGGLE);
+    }
+
     for (char key : status.word) {
         if (key == '\r' || key == '\n') {
             continue;
