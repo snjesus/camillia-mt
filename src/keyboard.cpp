@@ -1218,6 +1218,7 @@ void TDeckKeyboard::pumpCardputerKeys() {
                 if (key == '.') { heldCandidate = KEY_SCROLL_DN; break; }
                 if (key == ',') { heldCandidate = KEY_PREV_CHAN; break; }
                 if (key == '/') { heldCandidate = KEY_NEXT_CHAN; break; }
+                if (key == ' ') { heldCandidate = KEY_IME_TOGGLE; break; }
             }
             heldCandidate = normalizeCardputerKey(key);
             break;
@@ -1291,6 +1292,7 @@ void TDeckKeyboard::pumpCardputerKeys() {
                 case '.': enqueueCardputerKey(KEY_SCROLL_DN); continue;
                 case ',': enqueueCardputerKey(KEY_PREV_CHAN); continue;
                 case '/': enqueueCardputerKey(KEY_NEXT_CHAN); continue;
+                case ' ': enqueueCardputerKey(KEY_IME_TOGGLE); continue;
                 default: break;
             }
         }

@@ -28,6 +28,7 @@
 #include "gps.h"
 #include "los.h"
 #include "keyboard.h"
+#include "pinyin_ime.h"   // compose-screen pinyin IME over the PYI1 table
 #if defined(DEVICE_MESH_DECK)
 #include "aw9523.h"   // FT6636 reset sits on an expander, released at boot
 #endif
@@ -266,6 +267,16 @@ static uint32_t s_emojiPickerRepeatLastMs = 0;
 // (reply_id + emoji flag) on that message instead of a standalone message.
 static uint32_t s_emojiPickerTapbackId = 0;
 static lv_obj_t *s_composeCharCount = nullptr;
+// Pinyin IME bar: one row between the input and the legend -- a 中/EN toggle
+// button plus the composition + candidate cells. The row lives and dies with
+// the compose modal; the engine state behind it (pinyin_ime) survives so the
+// CN/EN choice sticks across compose sessions.
+static lv_obj_t *s_composeImeBar = nullptr;
+static lv_obj_t *s_composeImeToggleLbl = nullptr;
+static lv_obj_t *s_composeImeCands = nullptr;
+// Key-repeat guard: the Cardputer enqueues Fn+Space on every change event, so
+// a held chord would toggle the IME several times without this.
+static uint32_t s_imeToggleLastMs = 0;
 static lv_obj_t *s_cfgModal = nullptr;
 static lv_obj_t *s_cfgActionList = nullptr;
 static lv_obj_t *s_cfgInfoList = nullptr;
@@ -7238,10 +7249,174 @@ static void closeComposePrompt() {
     s_composeInput = nullptr;
     s_composeKeyboard = nullptr;
     s_composeCharCount = nullptr;
+    s_composeImeBar = nullptr;
+    s_composeImeToggleLbl = nullptr;
+    s_composeImeCands = nullptr;
+    // A half-typed composition is meaningless once the box is gone; the CN/EN
+    // mode itself is deliberately kept so the next compose opens the same way.
+    pinyin_ime::reset();
     s_composeTarget = COMPOSE_TARGET_CHANNEL;
     s_composeDmNodeId = 0;
     s_composeReplyPacketId = 0;
     s_composeChannelIdx = s_activeChannel;
+}
+
+// ── Pinyin IME bar ────────────────────────────────────────────────────────────
+// One row under the compose input: a 中/EN toggle button and, in CN mode, the
+// live composition plus the current page of candidates ("ni: 1.你 2.呢 ...").
+// All rendering goes through the emoji face, whose CJK fallback covers every
+// candidate the generator can emit (tools/gen_pinyin_ime.py filters to the
+// font's codepoints), so no candidate ever rasterizes as a missing glyph.
+
+static void composeImeRefreshBar() {
+    if (!s_composeImeBar) return;
+    if (s_composeImeToggleLbl) {
+        lv_label_set_text(s_composeImeToggleLbl, pinyin_ime::enabled() ? "中" : "EN");
+    }
+    if (!s_composeImeCands) return;
+    if (!pinyin_ime::enabled()) {
+        // Keep the bar visible as the feature's only discoverable affordance:
+        // the toggle button plus a hint naming the keyboard chord.
+        lv_label_set_text(s_composeImeCands, "Fn+Space: 中文");
+        return;
+    }
+    if (!pinyin_ime::hasComposition()) {
+        lv_label_set_text(s_composeImeCands, "CN: a-z 拼音  1-5 选字");
+        return;
+    }
+    char buf[160];
+    int n = snprintf(buf, sizeof(buf), "%s:", pinyin_ime::composition());
+    if (n < 0 || n >= (int)sizeof(buf)) {
+        lv_label_set_text(s_composeImeCands, pinyin_ime::composition());
+        return;
+    }
+    const int first = pinyin_ime::page() * pinyin_ime::kPageSize;
+    int last = first + pinyin_ime::kPageSize;
+    if (last > pinyin_ime::candidateCount()) last = pinyin_ime::candidateCount();
+    for (int i = first; i < last; ++i) {
+        const char *hz = pinyin_ime::candidate(i);
+        if (!hz) break;
+        int w = snprintf(buf + n, sizeof(buf) - (size_t)n, " %d.%s", i - first + 1, hz);
+        if (w < 0 || n + w >= (int)sizeof(buf)) break;
+        n += w;
+    }
+    if (pinyin_ime::pageCount() > 1) {
+        snprintf(buf + n, sizeof(buf) - (size_t)n, " %d/%d",
+                 pinyin_ime::page() + 1, pinyin_ime::pageCount());
+    }
+    lv_label_set_text(s_composeImeCands, buf);
+}
+
+static void composeImeTogglePressed(lv_event_t *e) {
+    LV_UNUSED(e);
+    pinyin_ime::toggle();
+    composeImeRefreshBar();
+}
+
+// Builds the bar into the parent (the compose input's host container), sized
+// to one text line. Called only from openComposePrompt; keyboard builds only,
+// since the on-screen LVGL keyboard feeds the textarea directly and never
+// reaches the pump where the IME hooks in.
+static void composeCreateImeBar(lv_obj_t *parent) {
+    s_composeImeBar = lv_obj_create(parent);
+    if (!s_composeImeBar) return;   // low-mem path: compose still works in EN
+    lv_obj_set_height(s_composeImeBar, 18);
+    lv_obj_set_width(s_composeImeBar, lv_pct(100));
+    lv_obj_clear_flag(s_composeImeBar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_opa(s_composeImeBar, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_composeImeBar, 0, 0);
+    lv_obj_set_style_pad_all(s_composeImeBar, 0, 0);
+    lv_obj_set_style_pad_column(s_composeImeBar, 6, 0);
+    lv_obj_set_flex_flow(s_composeImeBar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(s_composeImeBar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *btn = lv_btn_create(s_composeImeBar);
+    lv_obj_set_size(btn, 30, lv_pct(100));
+    lv_obj_set_style_pad_all(btn, 0, 0);
+    lv_obj_add_event_cb(btn, composeImeTogglePressed, LV_EVENT_CLICKED, nullptr);
+    s_composeImeToggleLbl = lv_label_create(btn);
+    lv_obj_set_style_text_font(s_composeImeToggleLbl, emojiFont(&lv_font_montserrat_12), 0);
+    lv_obj_center(s_composeImeToggleLbl);
+
+    s_composeImeCands = lv_label_create(s_composeImeBar);
+    lv_obj_set_flex_grow(s_composeImeCands, 1);
+    lv_label_set_long_mode(s_composeImeCands, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(s_composeImeCands, emojiFont(&lv_font_montserrat_12), 0);
+    lv_obj_set_style_text_color(s_composeImeCands, lv_color_hex(0xFFD966), 0);
+
+    composeImeRefreshBar();
+}
+
+// The compose screens' key switch calls this before its own cases; true means
+// the key belonged to the IME and is already handled. Keys that the IME has no
+// claim on (arrows, Enter and Esc with an empty composition, digits with an
+// empty composition) fall through so the box keeps its ordinary behaviour.
+static bool composeImeHandleKey(char k) {
+    if (!s_composeModal || !s_composeImeBar) return false;
+
+    if (k == KEY_IME_TOGGLE) {
+        const uint32_t now = millis();
+        if ((uint32_t)(now - s_imeToggleLastMs) >= 300UL) {
+            s_imeToggleLastMs = now;
+            pinyin_ime::toggle();
+            composeImeRefreshBar();
+        }
+        return true;
+    }
+    if (!pinyin_ime::enabled()) return false;
+
+    if (k >= 'A' && k <= 'Z') k = (char)(k - 'A' + 'a');   // feedLetter folds too
+    if (k >= 'a' && k <= 'z') {
+        // Letters never fall through in CN mode: an unmatchable composition
+        // simply shows an empty candidate list instead of typing itself.
+        pinyin_ime::feedLetter(k);
+        composeImeRefreshBar();
+        return true;
+    }
+    if (k >= '1' && k <= '5' && pinyin_ime::hasComposition()) {
+        const int idx = pinyin_ime::page() * pinyin_ime::kPageSize + (k - '1');
+        char out[4];
+        if (idx < pinyin_ime::candidateCount() && pinyin_ime::commitIndex(idx, out)
+            && s_composeInput) {
+            lv_textarea_add_text(s_composeInput, out);
+        }
+        composeImeRefreshBar();
+        return true;
+    }
+    if (k == ' ' && pinyin_ime::hasComposition()) {
+        char out[4];
+        if (pinyin_ime::commitFirst(out) && s_composeInput) {
+            lv_textarea_add_text(s_composeInput, out);
+        }
+        composeImeRefreshBar();
+        return true;
+    }
+    if ((k == KEY_BACKSPACE || k == KEY_BACKSPACE_HOLD) && pinyin_ime::hasComposition()) {
+        // KEY_BACK_BTN deliberately not here: the M9's Back keeps its
+        // "abandon the draft and close" meaning even with a composition up.
+        pinyin_ime::feedBackspace();
+        composeImeRefreshBar();
+        return true;
+    }
+    if (k == KEY_ENTER && pinyin_ime::hasComposition()) {
+        // IME convention: Enter commits the raw letters rather than sending.
+        if (s_composeInput) lv_textarea_add_text(s_composeInput, pinyin_ime::composition());
+        pinyin_ime::reset();
+        composeImeRefreshBar();
+        return true;
+    }
+    if (k == KEY_ESCAPE && pinyin_ime::hasComposition()) {
+        pinyin_ime::reset();
+        composeImeRefreshBar();
+        return true;
+    }
+    if ((k == KEY_PREV_CHAN || k == KEY_NEXT_CHAN) && pinyin_ime::hasComposition()) {
+        if (k == KEY_NEXT_CHAN) pinyin_ime::nextPage();
+        else pinyin_ime::prevPage();
+        composeImeRefreshBar();
+        return true;
+    }
+    return false;
 }
 
 // ── On-device emoji picker ────────────────────────────────────────────────────
@@ -8042,6 +8217,11 @@ static void openComposePrompt(uint32_t replyPacketId,
     lv_textarea_set_placeholder_text(s_composeInput, "Type message...");
     showTextareaCursor(s_composeInput);
     lv_obj_add_event_cb(s_composeInput, onComposeInputChanged, LV_EVENT_VALUE_CHANGED, nullptr);
+
+    // Pinyin IME bar, between the input and the legend. Keyboard builds only:
+    // the touch branch's on-screen keyboard writes the textarea directly and
+    // never passes through the pump where the IME intercepts keys.
+    composeCreateImeBar(composeInputHost);
 
     lv_obj_t *hint = lv_label_create(s_composeModal);
     lv_obj_set_width(hint, lv_pct(100));
@@ -27844,6 +28024,7 @@ static void pumpKeyboardInput() {
 
         if (s_dmModal) {
             if (s_composeModal) {
+                if (composeImeHandleKey(k)) continue;
                 switch (k) {
                     case KEY_ENTER:
                         sendComposeMessage();
@@ -28123,6 +28304,7 @@ static void pumpKeyboardInput() {
 
         if (s_nodesModal) {
             if (s_composeModal) {
+                if (composeImeHandleKey(k)) continue;
                 switch (k) {
                     case KEY_ENTER:
                         sendComposeMessage();
@@ -29009,6 +29191,9 @@ static void pumpKeyboardInput() {
             continue;
         }
 
+        // Compose on the chat/main screen: this bare switch is the fall-through
+        // when s_composeModal is up and no earlier branch claimed the key.
+        if (composeImeHandleKey(k)) continue;
         switch (k) {
             case KEY_ENTER:
                 sendComposeMessage();
