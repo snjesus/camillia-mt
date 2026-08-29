@@ -284,6 +284,7 @@ static bool sdReady = false;
 
 #if defined(DEVICE_TLORA_PAGER_TFT)
 namespace {
+constexpr uint8_t kXl9555RegIn1 = 0x01;
 constexpr uint8_t kXl9555RegOut0 = 0x02;
 constexpr uint8_t kXl9555RegOut1 = 0x03;
 constexpr uint8_t kXl9555RegCfg0 = 0x06;
@@ -321,33 +322,25 @@ static bool xl9555ReadReg(uint8_t addr, uint8_t reg, uint8_t &val) {
     return true;
 }
 
-static void xl9555SetOutput(uint8_t pin, bool level, bool invertDirSense,
+static void xl9555SetOutput(uint8_t pin, bool level,
                             uint8_t &out0, uint8_t &out1,
                             uint8_t &cfg0, uint8_t &cfg1) {
     uint8_t bit = (uint8_t)(1U << (pin & 0x07));
     if (pin < 8) {
-        if (invertDirSense) cfg0 |= bit;
-        else                cfg0 &= (uint8_t)~bit;
+        cfg0 &= (uint8_t)~bit;              // direction 0 = output
         if (level) out0 |= bit;
         else       out0 &= (uint8_t)~bit;
     } else {
-        if (invertDirSense) cfg1 |= bit;
-        else                cfg1 &= (uint8_t)~bit;
+        cfg1 &= (uint8_t)~bit;
         if (level) out1 |= bit;
         else       out1 &= (uint8_t)~bit;
     }
 }
 
-static void xl9555SetInput(uint8_t pin, bool invertDirSense,
-                           uint8_t &cfg0, uint8_t &cfg1) {
+static void xl9555SetInput(uint8_t pin, uint8_t &cfg0, uint8_t &cfg1) {
     uint8_t bit = (uint8_t)(1U << (pin & 0x07));
-    if (pin < 8) {
-        if (invertDirSense) cfg0 &= (uint8_t)~bit;
-        else                cfg0 |= bit;
-    } else {
-        if (invertDirSense) cfg1 &= (uint8_t)~bit;
-        else                cfg1 |= bit;
-    }
+    if (pin < 8) cfg0 |= bit;               // direction 1 = input
+    else         cfg1 |= bit;
 }
 
 static bool pagerFindExpander() {
@@ -368,17 +361,23 @@ static bool pagerApplyExpanderProfile(int profile) {
         return false;
     }
 
-    bool invertDirSense = false;
+    // Polarity space for the SD socket's XL9555 lines (register bits):
+    //   DET (10): card-insert sense — always an input, never driven.
+    //   PULLEN (11): optional pull enable — input / driven low / driven high.
+    //   EN (12): card power switch — driven high or low.
+    // Earlier builds flipped the direction-register semantics per profile,
+    // which left EN hi-Z and actually DROVE the DET sense line on some
+    // profiles. Profiles now enumerate the polarity space sanely.
     bool sdEnHigh = true;
     enum SdPullenMode : uint8_t { PULLEN_INPUT = 0, PULLEN_LOW = 1, PULLEN_HIGH = 2 };
     SdPullenMode pullenMode = PULLEN_INPUT;
 
     switch (profile) {
-        case 0: invertDirSense = false; sdEnHigh = true;  pullenMode = PULLEN_INPUT; break;
-        case 1: invertDirSense = false; sdEnHigh = false; pullenMode = PULLEN_INPUT; break;
-        case 2: invertDirSense = false; sdEnHigh = true;  pullenMode = PULLEN_LOW;   break;
-        case 3: invertDirSense = true;  sdEnHigh = true;  pullenMode = PULLEN_INPUT; break;
-        case 4: invertDirSense = true;  sdEnHigh = false; pullenMode = PULLEN_INPUT; break;
+        case 0: sdEnHigh = true;  pullenMode = PULLEN_INPUT; break;
+        case 1: sdEnHigh = false; pullenMode = PULLEN_INPUT; break;
+        case 2: sdEnHigh = true;  pullenMode = PULLEN_LOW;   break;
+        case 3: sdEnHigh = true;  pullenMode = PULLEN_HIGH;  break;
+        case 4: sdEnHigh = false; pullenMode = PULLEN_LOW;   break;
         default: return false;
     }
 
@@ -390,13 +389,12 @@ static bool pagerApplyExpanderProfile(int profile) {
 
     // SD probing must only touch SD-specific lines. Reprogramming shared rails
     // here can blank the display after radio bring-up on some pager units.
-    xl9555SetOutput(kExpSdEn, sdEnHigh, invertDirSense, out0, out1, cfg0, cfg1);
-    xl9555SetInput(kExpSdDet, invertDirSense, cfg0, cfg1);
-    if (pullenMode == PULLEN_INPUT) {
-        xl9555SetInput(kExpSdPullen, invertDirSense, cfg0, cfg1);
-    } else {
-        xl9555SetOutput(kExpSdPullen, pullenMode == PULLEN_HIGH, invertDirSense,
-                        out0, out1, cfg0, cfg1);
+    xl9555SetOutput(kExpSdEn, sdEnHigh, out0, out1, cfg0, cfg1);
+    xl9555SetInput(kExpSdDet, cfg0, cfg1);
+    switch (pullenMode) {
+        case PULLEN_INPUT: xl9555SetInput(kExpSdPullen, cfg0, cfg1); break;
+        case PULLEN_LOW:   xl9555SetOutput(kExpSdPullen, false, out0, out1, cfg0, cfg1); break;
+        case PULLEN_HIGH:  xl9555SetOutput(kExpSdPullen, true,  out0, out1, cfg0, cfg1); break;
     }
 
     bool ok = xl9555WriteReg(sPagerExpAddr, kXl9555RegOut0, out0)
@@ -409,8 +407,15 @@ static bool pagerApplyExpanderProfile(int profile) {
         return false;
     }
 
-    Serial.printf("[sd] pager expander ready addr=0x%02X profile=%d\n",
-                  sPagerExpAddr, profile);
+    uint8_t in1 = 0;
+    if (xl9555ReadReg(sPagerExpAddr, kXl9555RegIn1, in1)) {
+        Serial.printf("[sd] pager expander ready addr=0x%02X profile=%d en=%d pullen=%d det=%d\n",
+                      sPagerExpAddr, profile, sdEnHigh ? 1 : 0, (int)pullenMode,
+                      (in1 >> (kExpSdDet & 7)) & 1);
+    } else {
+        Serial.printf("[sd] pager expander ready addr=0x%02X profile=%d (det readback failed)\n",
+                      sPagerExpAddr, profile);
+    }
     return true;
 }
 } // namespace
@@ -1030,10 +1035,16 @@ bool sdBegin() {
     pinMode(TFT_CS, OUTPUT);
     digitalWrite(TFT_CS, HIGH);
 #endif
+#if defined(DEVICE_TLORA_PAGER_TFT)
+    // The ST25R3916 NFC front-end also hangs off this bus (CS=39); a floating
+    // CS lets it echo clocked data during SD init and corrupt the negotiation.
+    pinMode(NFC_CS, OUTPUT);
+    digitalWrite(NFC_CS, HIGH);
+#endif
     delay(8);
 
 #if defined(DEVICE_TLORA_PAGER_TFT)
-    // Prefer profile 3 first (validated on this pager), then fall back.
+    // NVS-cached good profile/speed first, then the whole polarity ladder.
     static const int kProfiles[] = { 3, 2, 0, 1, 4 };
     static const uint32_t kSpeeds[] = { 4000000UL, 1000000UL, 400000UL };
     const int kSpeedCount = (int)(sizeof(kSpeeds) / sizeof(kSpeeds[0]));

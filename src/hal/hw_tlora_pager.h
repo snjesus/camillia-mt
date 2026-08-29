@@ -66,8 +66,15 @@
 #endif
 
 // ── microSD — shared SPI2 bus ────────────────────────────────────────────────
+// Rail/detect lines live on the XL9555 expander (register bits): SD_DET=10,
+// SD_PULLEN=11, SD_EN=12. LilyGO's wiki pin table cites "GPIO12/14" — those
+// are physical chip pin numbers, not register bits (verified against the
+// lilygo_tlora_pager pins_arduino.h in arduino-esp32).
 #define SD_CS                     21
 #define HAS_SD_CARD                1
+
+// ── NFC — ST25R3916 also hangs off shared SPI2; keep its CS deasserted ──────
+#define NFC_CS                    39
 
 // ── TCA8418 I2C matrix keyboard ──────────────────────────────────────────────
 // The key map and modifier state machine live in keyboard.cpp.
