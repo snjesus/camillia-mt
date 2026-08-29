@@ -7,7 +7,8 @@
 //
 // Behaviour matches the reference implementation: a composition of at most
 // six letters prefix-matches the table's codes, collecting up to 45 ranked
-// single hanzi; five candidates show per page; committing clears state. The
+// single hanzi; kPageSize candidates show per page (5, or 3 on the Cardputer's
+// narrow panel); committing clears state. The
 // engine only owns pinyin state — key routing lives with the caller, which
 // decides what falls through to ordinary typing when the composition is
 // empty (digits, arrows, Enter, Space keep their normal meanings).
@@ -19,7 +20,15 @@ namespace pinyin_ime {
 constexpr int kMaxCandidates = 45;  // reference cap: ni collects its longer
                                     // prefixes' candidates too (ni, nian,
                                     // niao, ...) until the cap
+#if defined(DEVICE_CARDPUTER_LORA_HAT)
+// The Cardputer's 240 px panel gives the bar ~200 px after the toggle button;
+// five candidates plus the pinyin echo need ~220 px, which wrapped into two
+// clipped lines inside the 18 px bar. Three per page fits one line; the rest
+// stay reachable through page keys.
+constexpr int kPageSize = 3;
+#else
 constexpr int kPageSize = 5;
+#endif
 constexpr int kMaxComposition = 6;
 
 bool enabled();                     // CN/EN mode

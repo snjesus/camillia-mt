@@ -7281,7 +7281,8 @@ static void composeImeRefreshBar() {
         return;
     }
     if (!pinyin_ime::hasComposition()) {
-        lv_label_set_text(s_composeImeCands, "CN: a-z 拼音  1-5 选字");
+        lv_label_set_text_fmt(s_composeImeCands, "CN: a-z 拼音  1-%d 选字",
+                              pinyin_ime::kPageSize);
         return;
     }
     char buf[160];
@@ -7340,6 +7341,12 @@ static void composeCreateImeBar(lv_obj_t *parent) {
 
     s_composeImeCands = lv_label_create(s_composeImeBar);
     lv_obj_set_flex_grow(s_composeImeCands, 1);
+    // Pin the label to the bar's one-line height. With an auto height, flex
+    // lets the label grow vertically when the text is too wide, and LONG_DOT
+    // then happily shows the wrapped result — two half-clipped lines inside
+    // this 18 px bar. With a fixed height the dots mode does what it is for:
+    // one line, "..." when the tail does not fit.
+    lv_obj_set_height(s_composeImeCands, lv_pct(100));
     lv_label_set_long_mode(s_composeImeCands, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_font(s_composeImeCands, emojiFont(&lv_font_montserrat_12), 0);
     lv_obj_set_style_text_color(s_composeImeCands, lv_color_hex(0xFFD966), 0);
