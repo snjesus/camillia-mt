@@ -7358,7 +7358,8 @@ static bool composeImeHandleKey(char k) {
         const uint32_t now = millis();
         if ((uint32_t)(now - s_imeToggleLastMs) >= 300UL) {
             s_imeToggleLastMs = now;
-            pinyin_ime::toggle();
+            const bool becameCn = pinyin_ime::toggle();
+            Serial.printf("[ime] toggle -> %s\n", becameCn ? "CN" : "EN");
             composeImeRefreshBar();
         }
         return true;
@@ -7370,23 +7371,39 @@ static bool composeImeHandleKey(char k) {
         // Letters never fall through in CN mode: an unmatchable composition
         // simply shows an empty candidate list instead of typing itself.
         pinyin_ime::feedLetter(k);
+        const int cc = pinyin_ime::candidateCount();
+        Serial.printf("[ime] feed '%c' -> \"%s\" candidates=%d\n", k,
+                      pinyin_ime::composition(), cc);
         composeImeRefreshBar();
         return true;
     }
     if (k >= '1' && k <= '5' && pinyin_ime::hasComposition()) {
         const int idx = pinyin_ime::page() * pinyin_ime::kPageSize + (k - '1');
-        char out[4];
+        char out[4] = {0};
         if (idx < pinyin_ime::candidateCount() && pinyin_ime::commitIndex(idx, out)
             && s_composeInput) {
             lv_textarea_add_text(s_composeInput, out);
+            Serial.printf("[ime] pick #%d -> '%s' (U+%02X%02X%02X)\n", k - '1' + 1,
+                          out, (uint8_t)out[0], (uint8_t)out[1], (uint8_t)out[2]);
+        } else {
+            Serial.printf("[ime] pick #%d out of range (count=%d page=%d)\n",
+                          k - '1' + 1, pinyin_ime::candidateCount(), pinyin_ime::page());
         }
         composeImeRefreshBar();
         return true;
     }
     if (k == ' ' && pinyin_ime::hasComposition()) {
-        char out[4];
+        char out[4] = {0};
         if (pinyin_ime::commitFirst(out) && s_composeInput) {
             lv_textarea_add_text(s_composeInput, out);
+            Serial.printf("[ime] space commit -> '%s'\n", out);
+        } else if (s_composeInput) {
+            // No candidate matched the current composition (e.g. user typed a
+            // non-pinyin sequence on purpose). Clear the buffer and insert a
+            // regular space instead of silently swallowing a space keypress.
+            pinyin_ime::reset();
+            lv_textarea_add_text(s_composeInput, " ");
+            Serial.printf("[ime] space (no candidate) -> space\n");
         }
         composeImeRefreshBar();
         return true;
@@ -7395,24 +7412,28 @@ static bool composeImeHandleKey(char k) {
         // KEY_BACK_BTN deliberately not here: the M9's Back keeps its
         // "abandon the draft and close" meaning even with a composition up.
         pinyin_ime::feedBackspace();
+        Serial.printf("[ime] backspace -> \"%s\"\n", pinyin_ime::composition());
         composeImeRefreshBar();
         return true;
     }
     if (k == KEY_ENTER && pinyin_ime::hasComposition()) {
         // IME convention: Enter commits the raw letters rather than sending.
         if (s_composeInput) lv_textarea_add_text(s_composeInput, pinyin_ime::composition());
+        Serial.printf("[ime] enter raw commit -> \"%s\"\n", pinyin_ime::composition());
         pinyin_ime::reset();
         composeImeRefreshBar();
         return true;
     }
     if (k == KEY_ESCAPE && pinyin_ime::hasComposition()) {
         pinyin_ime::reset();
+        Serial.printf("[ime] escape -> reset\n");
         composeImeRefreshBar();
         return true;
     }
     if ((k == KEY_PREV_CHAN || k == KEY_NEXT_CHAN) && pinyin_ime::hasComposition()) {
         if (k == KEY_NEXT_CHAN) pinyin_ime::nextPage();
         else pinyin_ime::prevPage();
+        Serial.printf("[ime] page -> %d/%d\n", pinyin_ime::page() + 1, pinyin_ime::pageCount());
         composeImeRefreshBar();
         return true;
     }
@@ -8161,6 +8182,18 @@ static void openComposePrompt(uint32_t replyPacketId,
     composeInputHost = composeCenterBand;
 #endif
 
+    // Pinyin IME bar, placed before the textarea inside the centre band so the
+    // band's flex column allocates it its fixed 18 px first and lets the
+    // textarea flex-grow=1 take whatever remains. If the IME bar came AFTER the
+    // input on a band board, the input's flex-grow would eat every pixel of
+    // slack and the 18-px bar would be clipped to ~6 visible rows (or zero)
+    // on tight panels like the Cardputer (240x135).
+    //
+    // Non-band boards (tlora-pager-tft) still build into the modal (which is
+    // the composeInputHost); they have no growing input so the order there
+    // does not matter either way.
+    composeCreateImeBar(composeInputHost);
+
     s_composeInput = lv_textarea_create(composeInputHost);
     if (!s_composeInput) {
         logLvglMemDiag("compose open aborted (low LVGL mem)");
@@ -8217,11 +8250,6 @@ static void openComposePrompt(uint32_t replyPacketId,
     lv_textarea_set_placeholder_text(s_composeInput, "Type message...");
     showTextareaCursor(s_composeInput);
     lv_obj_add_event_cb(s_composeInput, onComposeInputChanged, LV_EVENT_VALUE_CHANGED, nullptr);
-
-    // Pinyin IME bar, between the input and the legend. Keyboard builds only:
-    // the touch branch's on-screen keyboard writes the textarea directly and
-    // never passes through the pump where the IME intercepts keys.
-    composeCreateImeBar(composeInputHost);
 
     lv_obj_t *hint = lv_label_create(s_composeModal);
     lv_obj_set_width(hint, lv_pct(100));
