@@ -88,8 +88,8 @@ The script embeds the frequency-ranked top-2,000 characters; keep tdeck's worst 
 
 On keyboard builds the compose screen has a pinyin input method for typing Chinese into messages. The bar between the message box and the key legend holds a **中/EN** toggle button plus the live composition and candidate cells.
 
-- **中/EN toggle** — click the button, or press **Fn+Space** on the Cardputer. The mode persists across compose sessions; arrow left/right flip candidate pages while a composition is up.
-- **Type** — letters build the pinyin composition (max 6); the bar shows `pinyin: 1.你 2.呢 ...` five candidates at a time.
+- **中/EN toggle** — click the button, or press **Fn+Space** on the Cardputer / **Sym+Space** on the T-Lora Pager. The mode persists across compose sessions; arrow left/right (or `,`/`.` while composing) flip candidate pages.
+- **Type** — letters build the pinyin composition (max 6); the bar shows `pinyin: 1.你 2.呢 ...` five candidates at a time (three per page on the Cardputer's narrow panel).
 - **Commit** — digits **1–5** pick the matching candidate, **Space** commits the first one, **Enter** commits the raw letters as typed.
 - **Undo** — **Backspace** removes one composition letter (once empty it deletes message text again), **Esc** clears the composition.
 

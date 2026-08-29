@@ -7277,7 +7277,11 @@ static void composeImeRefreshBar() {
     if (!pinyin_ime::enabled()) {
         // Keep the bar visible as the feature's only discoverable affordance:
         // the toggle button plus a hint naming the keyboard chord.
+#if defined(DEVICE_TLORA_PAGER_TFT)
+        lv_label_set_text(s_composeImeCands, "Sym+Space: 中文");
+#else
         lv_label_set_text(s_composeImeCands, "Fn+Space: 中文");
+#endif
         return;
     }
     if (!pinyin_ime::hasComposition()) {

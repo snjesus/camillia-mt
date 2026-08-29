@@ -3,7 +3,7 @@
 // hal/hw_tlora_pager.h — Hardware pin definitions for the LilyGO T-LoRa Pager
 //
 // The T-LoRa Pager TFT is a pager-form-factor ESP32-S3 device featuring:
-//   • 4.6" ST7796 480×222 TFT panel (landscape native)
+//   • 2.33" ST7796 480×222 TFT panel (landscape native)
 //   • SX1262 (or optional LR1121) LoRa radio — rail powered via XL9555 expander
 //   • TCA8418 matrix keyboard with backlight
 //   • Rotary wheel + click for scroll/nav (quadrature-decoded)
@@ -102,10 +102,13 @@
 #define USER_BUTTON_PIN            0   // BOOT button (active LOW)
 #define USER_BUTTON_ACTIVE_LEVEL   LOW
 
-// ── GPS — L76K on UART1; rail powered via XL9555 ────────────────────────────
+// ── GPS — MIA-M10Q on UART1; rail powered via XL9555 ────────────────────────
+// Host-side pins, matching gps.cpp: GPS_RX is the pin the ESP32 RECEIVES NMEA
+// on (wired to the module's TX), GPS_TX drives the module's RX. Per LilyGO's
+// T-LoRaPager reference: BOARD_GPS_RX_PIN=12, BOARD_GPS_TX_PIN=4.
 #define HAS_GPS                    1
-#define GPS_RX                     4
-#define GPS_TX                    12
+#define GPS_RX                    12
+#define GPS_TX                     4
 #define GPS_BAUD               38400
 
 // ── ES8311 I2S audio codec ───────────────────────────────────────────────────

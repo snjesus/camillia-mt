@@ -190,6 +190,7 @@ constexpr uint8_t TLORA_REG_DEBOUNCE_DIS_3 = 0x2B;
 constexpr uint16_t TLORA_MOD_TIMEOUT_MS = 1500;
 constexpr uint16_t TLORA_BKSP_HOLD_MS = 3000;
 constexpr uint8_t TLORA_KEYNUM_BACKSPACE = 30;
+constexpr uint8_t TLORA_KEYNUM_SPACE = 31;
 constexpr uint8_t TLORA_MOD_SHIFT = 0x01;
 constexpr uint8_t TLORA_MOD_SYM = 0x02;
 constexpr int8_t kRotaryDelta[16] = {
@@ -389,6 +390,16 @@ char tloraReadMappedKey() {
                 sTloraHeldSinceMs = 0;
             }
             continue;
+        }
+
+        // Sym+Space toggles the pinyin IME — this board's counterpart to the
+        // Cardputer's Fn+Space. Must be checked here, before tloraTranslateKey():
+        // the modifier state is one-shot and consumed by the next mapped press,
+        // so inside the translator the chord would just arm, type a bare space
+        // and swallow the Sym intent.
+        if (keyNum == TLORA_KEYNUM_SPACE && (sTloraModifier & TLORA_MOD_SYM)) {
+            sTloraModifier = 0;
+            return KEY_IME_TOGGLE;
         }
 
         char mapped = tloraTranslateKey(keyNum);
