@@ -21,6 +21,9 @@
 #else
 #  include <LittleFS.h>
 #endif
+#if defined(HAS_INTERNAL_FS_FALLBACK)
+#  include <LittleFS.h>
+#endif
 
 // True when this board can persist files at all, whichever backend it uses.
 // Prefer this over HAS_SD_CARD for "can we save/load a file?" decisions —
@@ -45,3 +48,8 @@ bool storageMounted();
 // Human-readable backend name for diagnostics and UI ("SD card", "internal
 // flash"), so a message can say where a file actually went.
 const char *storageName();
+
+// SD-slot boards only: mount the internal-flash LittleFS partition when the
+// card can't be mounted, so persistence survives without a card. Switches
+// storageFs()/storageName() to the fallback backend until reboot.
+bool storageBeginInternalFallback();

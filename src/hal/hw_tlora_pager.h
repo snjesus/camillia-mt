@@ -73,6 +73,13 @@
 #define SD_CS                     21
 #define HAS_SD_CARD                1
 
+// Internal-flash storage fallback: when the SD card can't be mounted, the
+// storage layer falls back to this LittleFS partition (see
+// partitions_pager_fs.csv) so DM history, the node archive and config export
+// keep working. SD stays first choice whenever a card mounts.
+#define HAS_INTERNAL_FS_FALLBACK   1
+#define INTERNAL_FS_FALLBACK_PARTITION "littlefs"
+
 // ── NFC — ST25R3916 also hangs off shared SPI2; keep its CS deasserted ──────
 #define NFC_CS                    39
 

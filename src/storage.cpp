@@ -10,12 +10,21 @@
 
 namespace {
 bool sMounted = false;
+#if defined(HAS_INTERNAL_FS_FALLBACK)
+// Runtime backend switch: false = the SD card object, true = the internal
+// LittleFS partition mounted after the card failed. storageFs() consumers
+// don't know or care which one is live.
+bool sLittleFsFallback = false;
+#endif
 }
 
 fs::FS &storageFs() {
 #if defined(HAS_SD_MMC) && HAS_SD_MMC
     return SD_MMC;
 #elif HAS_SD_CARD
+#  if defined(HAS_INTERNAL_FS_FALLBACK)
+    if (sLittleFsFallback) return LittleFS;
+#  endif
     return SD;
 #else
     return LittleFS;
@@ -28,6 +37,9 @@ const char *storageName() {
 #if defined(HAS_SD_MMC) && HAS_SD_MMC
     return "SD card (SD_MMC)";
 #elif HAS_SD_CARD
+#  if defined(HAS_INTERNAL_FS_FALLBACK)
+    if (sLittleFsFallback) return "internal flash (SD unavailable)";
+#  endif
     return "SD card";
 #else
     return "internal flash";
@@ -94,4 +106,27 @@ bool storageBegin() {
     }
 #endif
     return sMounted;
+}
+
+bool storageBeginInternalFallback() {
+#if defined(HAS_INTERNAL_FS_FALLBACK)
+    if (sMounted) return true;
+    // format-on-fail: the partition is blank on first boot after the new
+    // partition table lands; format it once rather than stay without storage.
+    sMounted = LittleFS.begin(/*formatOnFail=*/true, "/littlefs",
+                              /*maxOpenFiles=*/5, INTERNAL_FS_FALLBACK_PARTITION);
+    if (sMounted) {
+        sLittleFsFallback = true;
+        Serial.printf("[fs] %s mounted: %u KB used of %u KB\n",
+                      storageName(),
+                      (unsigned)(LittleFS.usedBytes() / 1024),
+                      (unsigned)(LittleFS.totalBytes() / 1024));
+    } else {
+        Serial.printf("[fs] %s mount FAILED (partition '%s' missing?)\n",
+                      storageName(), INTERNAL_FS_FALLBACK_PARTITION);
+    }
+    return sMounted;
+#else
+    return false;
+#endif
 }

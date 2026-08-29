@@ -1129,6 +1129,17 @@ bool sdBegin() {
     Serial.printf("[sd] %s cs=%d sck=%d miso=%d mosi=%d\n",
                   sdReady ? "mounted" : "not found",
                   SD_CS, LORA_SPI_SCK, LORA_SPI_MISO, LORA_SPI_MOSI);
+#if defined(HAS_INTERNAL_FS_FALLBACK)
+    if (!sdReady) {
+        // Card didn't mount: fall back to internal flash so DM history, the
+        // node archive and config export keep working without a card. SD is
+        // retried first on every boot; storageFs() switches back to it then.
+        if (storageBeginInternalFallback()) {
+            sdReady = true;
+            Serial.println("[sd] continuing on internal flash fallback");
+        }
+    }
+#endif
     return sdReady;
 #endif
 }
