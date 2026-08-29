@@ -7437,8 +7437,13 @@ static bool composeImeHandleKey(char k) {
         composeImeRefreshBar();
         return true;
     }
-    if ((k == KEY_PREV_CHAN || k == KEY_NEXT_CHAN) && pinyin_ime::hasComposition()) {
-        if (k == KEY_NEXT_CHAN) pinyin_ime::nextPage();
+    if (pinyin_ime::hasComposition()
+        && (k == KEY_PREV_CHAN || k == KEY_NEXT_CHAN || k == ',' || k == '.')) {
+        // ',' / '.' work bare here: the Fn chords for these never fire (the
+        // library leaves `word` empty while Fn is held — see pumpCardputerKeys),
+        // and with a live composition the two keys have no better meaning in
+        // the draft anyway. '.' / KEY_NEXT_CHAN page forward.
+        if (k == KEY_NEXT_CHAN || k == '.') pinyin_ime::nextPage();
         else pinyin_ime::prevPage();
         Serial.printf("[ime] page -> %d/%d\n", pinyin_ime::page() + 1, pinyin_ime::pageCount());
         composeImeRefreshBar();
