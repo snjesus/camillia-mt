@@ -72,6 +72,12 @@ The Config screen's **Choose WiFi** list includes an **AP** entry that forces th
 
 Export or import a full YAML configuration file via the **CFG** tab. The file is read from and written to `/camillia/config.yaml` on the microSD card.
 
+### CJK fallback
+
+Text rendered through `emojiFont()` walks the chain **Montserrat → emoji → CJK**, so Chinese characters in node names, channel names, channel chat messages, DM previews, and DMs render inline alongside Latin and emoji without per-call-site handling. The CJK font is generated from [Noto Sans CJK SC](https://github.com/notofonts/noto-cjk) (SIL OFL 1.1) by `tools/gen_cjk_font.py`, which subs to 5,000 CJK Unified codepoints plus CJK punctuation and fullwidth forms (~1.0 MB flash after layout-table stripping). Generated output lands in `src/fonts/cjk_font.h`. Resubset if you want to expand or shrink the character set — rebuild alone is enough, no flash layout changes; see the tool's docstring for the commands and trade-offs.
+
+Subset to a larger set by raising the `range(0x4E00, 0x4E00 + N)` line in `gen_cjk_font.py`. The Cardputer's 8 MB flash places a hard ceiling around the round-1 ~5,000-character build; other boards (T-Deck, Pager, M9, Square — all 16 MB flash) have room to grow.
+
 ## Releases
 
 Releases are cut with [`release.sh`](release.sh), which builds every device
