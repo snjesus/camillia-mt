@@ -2700,7 +2700,9 @@ static inline void pagerAudioStartPlayback() {
     delay(AUDIO_AMP_SETTLE_MS);
     // Codec gain is fixed; apply it (while still muted) right before playback.
     pagerAudioSetCodecGain();
-    i2s_zero_dma_buffer(kPagerI2SPort);
+    // NB: no i2s_zero_dma_buffer here — at this point the ring already holds
+    // silence from the previous stop, and zeroing while DMA may still own
+    // descriptors corrupts the ring (see pagerAudioStopPlayback).
     // Prime codec/I2S with a short silent pre-roll so the first note isn't clipped.
     int16_t preRoll[256] = {0};
     size_t preRollWritten = 0;
@@ -2711,19 +2713,42 @@ static inline void pagerAudioStartPlayback() {
 }
 
 static inline void pagerAudioStopPlayback() {
-    // Push a silence tail deep enough to flush the DMA ring (6 x 256 frames =
-    // ~35ms at 44.1kHz stereo) BEFORE muting, otherwise queued tone samples are
-    // zeroed mid-note and every tone sounds audibly short. 2048 frames covers
-    // the full ring with margin.
+    // Push a silence tail deep enough to cover the DMA ring (6 x 256 frames =
+    // ~35ms at 44.1kHz stereo) so queued tone samples are replaced by silence,
+    // then let it actually DRAIN before muting. Deliberately no
+    // i2s_zero_dma_buffer: zeroing while the DMA is still draining the queued
+    // tail lets CPU and DMA own the same descriptors — the ring ends up
+    // corrupted and the next i2s_write, running with portMAX_DELAY, blocked
+    // the UI task forever (the observed ~15s freeze: boot sound wedged the
+    // ring, the first notification tone hung). The ring holds silence now,
+    // so there is nothing stale to zero.
     static int16_t tail[2048 * 2] = {0};
     size_t tailWritten = 0;
     (void)i2s_write(kPagerI2SPort, tail, sizeof(tail), &tailWritten,
-                    60 / portTICK_PERIOD_MS);
+                    100 / portTICK_PERIOD_MS);
+    delay(50);   // drain the queued tail before muting (2048 frames = ~46ms)
     // Mute while the output is silent, then leave the DAC muted for idle so it
     // can't emit stray clicks between sounds. Codec gain stays where it was.
     sPagerAudioBoard.setMute(true);
-    i2s_zero_dma_buffer(kPagerI2SPort);
     pagerAudioSetAmp(false);  // power down the amp for idle → no idle snaps
+}
+
+// Bounded I2S write for tone playback. A 120-frame chunk at 44.1kHz stereo is
+// ~2.7ms of audio; anything beyond 100ms means the DMA ring wedged. Fail out
+// (and reset the driver for a clean reinit on the next tone) instead of
+// hanging the UI task forever.
+static bool pagerAudioWriteChunk(const void *data, size_t bytes) {
+    size_t written = 0;
+    esp_err_t err = i2s_write(kPagerI2SPort, data, bytes, &written,
+                              100 / portTICK_PERIOD_MS);
+    if (err != ESP_OK || written != bytes) {
+        Serial.printf("[audio] i2s write stalled (err=%d written=%u/%u) - resetting i2s\n",
+                      (int)err, (unsigned)written, (unsigned)bytes);
+        i2s_driver_uninstall(kPagerI2SPort);
+        sPagerAudioReady = false;   // next tone runs a full codec+i2s reinit
+        return false;
+    }
+    return true;
 }
 
 static void pagerAudioWriteSilence(uint16_t durationMs) {
@@ -2734,19 +2759,24 @@ static void pagerAudioWriteSilence(uint16_t durationMs) {
     int16_t zeroPcm[kChunkFrames * 2] = {0};
 
     uint32_t framesRemaining = ((uint32_t)durationMs * kSampleRate) / 1000U;
+    // Hard deadline: even repeated slow-but-successful writes must never turn
+    // a ~durationMs sound into an unbounded UI stall.
+    const uint32_t deadlineMs = millis() + durationMs + 250;
     while (framesRemaining > 0) {
         int framesNow = (framesRemaining > (uint32_t)kChunkFrames)
                         ? kChunkFrames
                         : (int)framesRemaining;
         size_t written = 0;
-        esp_err_t err = i2s_write(kPagerI2SPort, zeroPcm,
-                                  (size_t)(framesNow * 2 * (int)sizeof(int16_t)),
-                                  &written, portMAX_DELAY);
-        if (err != ESP_OK) {
-            Serial.printf("[audio] i2s silence write failed err=%d\n", (int)err);
+        (void)written;
+        if (!pagerAudioWriteChunk(zeroPcm,
+                                  (size_t)(framesNow * 2 * (int)sizeof(int16_t)))) {
             break;
         }
         framesRemaining -= (uint32_t)framesNow;
+        if ((int32_t)(millis() - deadlineMs) >= 0) {
+            Serial.println("[audio] silence write exceeded deadline - aborting");
+            break;
+        }
     }
 }
 
@@ -2772,6 +2802,9 @@ static void pagerAudioPlayTone(uint16_t freqHz, uint16_t durationMs) {
 
     const float phaseStep = 2.0f * (float)M_PI * (float)freqHz / (float)kSampleRate;
     float phase = 0.0f;
+    // Hard deadline, same rationale as the silence path: a wedged DMA must
+    // cost a skipped tone, never the UI task.
+    const uint32_t deadlineMs = millis() + durationMs + 250;
 
     while (framesRemaining > 0) {
         int framesNow = (framesRemaining > (uint32_t)kChunkFrames)
@@ -2798,15 +2831,15 @@ static void pagerAudioPlayTone(uint16_t freqHz, uint16_t durationMs) {
             frameIndex++;
         }
 
-        size_t written = 0;
-        esp_err_t err = i2s_write(kPagerI2SPort, pcm,
-                                  (size_t)(framesNow * 2 * (int)sizeof(int16_t)),
-                                  &written, portMAX_DELAY);
-        if (err != ESP_OK) {
-            Serial.printf("[audio] i2s write failed err=%d\n", (int)err);
+        if (!pagerAudioWriteChunk(pcm,
+                                  (size_t)(framesNow * 2 * (int)sizeof(int16_t)))) {
             break;
         }
         framesRemaining -= (uint32_t)framesNow;
+        if ((int32_t)(millis() - deadlineMs) >= 0) {
+            Serial.println("[audio] tone write exceeded deadline - aborting");
+            break;
+        }
     }
 }
 
