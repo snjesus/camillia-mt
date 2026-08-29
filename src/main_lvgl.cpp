@@ -2544,12 +2544,12 @@ namespace {
 static bool sPagerAudioInitTried = false;
 static bool sPagerAudioReady = false;
 static constexpr i2s_port_t kPagerI2SPort = I2S_NUM_0;
-// ES8311 REG32 is an ATTENUATION register (0x00 = loudest, larger = quieter),
-// but the audio-driver lib's setVoiceVolume() maps a larger user volume to a
-// larger register value — inverted — and tops out ~27dB below max even at 100.
-// Bypass it: write the gain directly and keep it fixed; the mute bit handles
-// silence and notifyVolumeScale() handles user volume in the digital domain.
-static constexpr uint8_t kPagerCodecGain = 0x10;  // ~-6dB: loud but no clipping
+// ES8311 REG32 is the DAC volume register: 0x00 = silent, larger = louder.
+// The audio-driver lib's own log mapping tops out at ~71 (0x47) for user
+// volume 100, which is too quiet on this board's fixed-gain amp. Write a
+// higher value directly; the mute bit handles silence and notifyVolumeScale()
+// remains the user-facing volume knob in the digital domain.
+static constexpr uint8_t kPagerCodecGain = 0x50;  // louder than lib's 100
 static constexpr float kPagerToneAmplitude = 7800.0f;
 static audio_driver::DriverPins sPagerAudioPins;
 static audio_driver::AudioBoard sPagerAudioBoard(audio_driver::AudioDriverES8311,
@@ -2557,7 +2557,7 @@ static audio_driver::AudioBoard sPagerAudioBoard(audio_driver::AudioDriverES8311
 
 static void pagerAudioSetCodecGain() {
     Wire.beginTransmission(AUDIO_CODEC_ADDR);
-    Wire.write(0x32);  // ES8311 DAC volume (attenuation)
+    Wire.write(0x32);  // ES8311 DAC volume (0 = silent, larger = louder)
     Wire.write(kPagerCodecGain);
     Wire.endTransmission();
 }
