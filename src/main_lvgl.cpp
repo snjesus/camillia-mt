@@ -2670,11 +2670,26 @@ static audio_driver::AudioBoard sPagerAudioBoard(audio_driver::AudioDriverES8311
                                                  sPagerAudioPins);
 
 static void pagerAudioSetCodecGain() {
-    Wire.beginTransmission(AUDIO_CODEC_ADDR);
-    Wire.write(0x32);  // ES8311 DAC volume (0 = silent, larger = louder)
-    Wire.write(kPagerCodecGain);
-    Wire.endTransmission();
+    // Use the lib's own setVolume path — the proven-good I2C route on this
+    // board (it made the original build audible). Its log curve tops out at
+    // REG32 ~0x47 for volume 100, which is the loudest we ship. The direct
+    // REG32 write stays only as a fallback: an unACKed direct write silently
+    // leaves the register at 0x00 (what mute() writes) = permanent silence,
+    // which is exactly what the direct-write-only builds produced in the
+    // field even at "0x50".
+    if (!sPagerAudioBoard.setVolume(100)) {
+        Wire.beginTransmission(AUDIO_CODEC_ADDR);
+        Wire.write(0x32);  // ES8311 DAC volume (0 = silent, larger = louder)
+        Wire.write(kPagerCodecGain);
+        bool ok = Wire.endTransmission() == 0;
+        Serial.printf("[audio] lib setVolume failed; direct REG32 write %s\n",
+                      ok ? "ack" : "NACK");
+    }
 }
+
+// One-shot codec/amp health dump (defined after pagerAudioSetAmp below, where
+// the expander helpers are visible) — see pagerAudioProbeOnce.
+static void pagerAudioProbeOnce();
 
 // Gate the speaker power amp. It stays off while idle so power-supply
 // transients (for example LoRa TX current spikes) cannot become random clicks.
@@ -2694,6 +2709,41 @@ static void pagerAudioSetAmp(bool on) {
     xl9555SetOutput(XL9555_PIN_AMP_EN, on, out0, out1, cfg0, cfg1);
     (void)xl9555WriteAll((uint8_t)sPagerExpAddr, out0, out1, cfg0, cfg1);
 #endif
+}
+
+// One-shot codec/amp health dump at the first playback attempt, so a
+// "completely silent" report comes with register-level evidence instead of
+// another guess: REG32 (volume), REG31 bit5 (DAC mute), the expander AMP_EN
+// output bit, and the codec's chip version register (0xFF) as a probe that
+// the part actually answers on 0x18.
+static void pagerAudioProbeOnce() {
+    static bool sDone = false;
+    if (sDone) return;
+    sDone = true;
+
+    auto readReg = [](uint8_t reg) -> int {
+        Wire.beginTransmission(AUDIO_CODEC_ADDR);
+        Wire.write(reg);
+        if (Wire.endTransmission(false) != 0) return -1;
+        if (Wire.requestFrom((int)AUDIO_CODEC_ADDR, 1) != 1) return -1;
+        return Wire.read();
+    };
+    int reg32 = readReg(0x32);
+    int reg31 = readReg(0x31);
+    int ver = readReg(0xFF);
+    Serial.printf("[audio] probe: ver=0x%02X REG32(vol)=0x%02X REG31.mute=%d\n",
+                  (unsigned)(ver < 0 ? 0 : ver),
+                  (unsigned)(reg32 < 0 ? 0 : reg32),
+                  (reg31 < 0) ? -1 : (int)((reg31 & 0x20) >> 5));
+
+    uint8_t out0, out1, cfg0, cfg1;
+    if (sPagerExpAddr >= 0
+        && xl9555ReadAll((uint8_t)sPagerExpAddr, out0, out1, cfg0, cfg1)) {
+        Serial.printf("[audio] amp rail: OUT0=0x%02X CFG0=0x%02X (bit1 amp)\n",
+                      out0, cfg0);
+    } else {
+        Serial.println("[audio] amp rail: expander unreadable");
+    }
 }
 
 static bool pagerAudioSelectCommFormat(i2s_config_t &cfg) {
@@ -2809,6 +2859,7 @@ static bool pagerAudioEnsureReady() {
 }
 
 static inline void pagerAudioStartPlayback() {
+    pagerAudioProbeOnce();
     // Power the speaker amp and let the class-D output stage settle before audio.
     pagerAudioSetAmp(true);
     delay(AUDIO_AMP_SETTLE_MS);

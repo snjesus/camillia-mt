@@ -1129,6 +1129,16 @@ bool sdBegin() {
     Serial.printf("[sd] %s cs=%d sck=%d miso=%d mosi=%d\n",
                   sdReady ? "mounted" : "not found",
                   SD_CS, LORA_SPI_SCK, LORA_SPI_MISO, LORA_SPI_MOSI);
+#if defined(DEVICE_TLORA_PAGER_TFT)
+    if (!sdReady) {
+        // Field evidence: powered profiles fail f_mount with (13) "no valid
+        // FAT volume" while the card is present (det asserted) and the bus is
+        // alive — the signature of an exFAT/corrupt card, since the SD lib
+        // speaks FAT32 only. Say so, or every reflash looks like a board bug.
+        Serial.println("[sd] hint: card detected but no FAT volume - reformat "
+                       "the card as FAT32 (exFAT is unsupported)");
+    }
+#endif
 #if defined(HAS_INTERNAL_FS_FALLBACK)
     if (!sdReady) {
         // Card didn't mount: fall back to internal flash so DM history, the
