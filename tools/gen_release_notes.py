@@ -27,9 +27,11 @@ MAX_BYTES = 4096
 # literal early, so that sequence is neutralised below.
 DELIM = "CAMNOTES"
 
-# The compiled Montserrat faces are ASCII-only, so smart punctuation would
-# render as blank boxes on the device. Fold the characters an LLM actually
-# reaches for; anything else non-ASCII is dropped by the filter further down.
+# Smart punctuation would still render oddly (the fold table below), but the
+# CJK fallback face (text_fallback) draws Chinese inline since v4.8.0, so the
+# old emoji-era guard that stripped ALL non-ASCII is gone — that filter was
+# eating every Chinese character in these notes. Only control characters are
+# dropped now.
 UNICODE_FOLD = {
     "—": "-",   # em dash
     "–": "-",   # en dash
@@ -62,8 +64,9 @@ def clean(text):
         # '### New' reads as noise on a 240px panel; keep the heading text and
         # drop the markdown marker. Bullets and everything else stay verbatim.
         line = re.sub(r"^\s*#{1,6}\s*", "", line)
-        # Drop anything still outside ASCII rather than shipping tofu boxes.
-        line = "".join(ch for ch in line if ch == "\t" or 0x20 <= ord(ch) < 0x7F)
+        # Drop control characters (the viewer can't show them) and keep
+        # everything else verbatim — CJK folds in via the fallback face.
+        line = "".join(ch for ch in line if ch == "\t" or ord(ch) >= 0x20 and (ord(ch) < 0x7F or ord(ch) >= 0xA0))
         out_lines.append(line.rstrip())
 
     text = "\n".join(out_lines).strip("\n")

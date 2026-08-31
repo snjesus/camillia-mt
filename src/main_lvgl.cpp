@@ -255,7 +255,15 @@ static lv_obj_t *s_composeKeyboard = nullptr;
 static lv_obj_t *s_emojiPickerBackdrop = nullptr;
 static lv_obj_t *s_emojiPickerModal = nullptr;
 static int s_emojiPickerSelection = 0;
-// Cells per row in the tray, computed when it is built (see openSymbolPicker),
+// Send mode: picking fires a one-emoji message and closes the tray (the 'e'
+// browse shortcut on keyboard builds). Insert mode: picking appends to the open
+// compose box and keeps the tray up (the touch-only in-compose 😀 button).
+static bool s_emojiPickerSendMode = false;
+// Packet id the pick reacts to. Non-zero when the tray was opened in send mode
+// with the chat cursor sitting on a message: the pick then goes out as a tapback
+// (reply_id + emoji flag) on that message instead of a standalone message.
+static uint32_t s_emojiPickerTapbackId = 0;
+// Cells per row in the tray, computed when it is built (see openEmojiPicker),
 // so up/down step a row instead of a cell.
 static int s_emojiPickerCols = 1;
 // Hold-to-repeat: the direction the held key is stepping, and when it last
@@ -936,18 +944,12 @@ static bool s_nodesActionLocateEnabled = false;
 // Keep the two lists in step.
 //
 // kTapbackTray is the *wire* form: the exact codepoints other clients match
-// against. The device no longer carries an emoji face, so these render as tofu
-// if drawn raw — kTapbackLabel is what the UI shows instead, one ASCII stand-in
-// per entry. Keep the two lists in step too.
+// against. They also render raw on the device — the emoji face covers every
+// entry in the tray.
 static const char *const kTapbackTray[] = {
     "\U0001F44D", "\U0001F44E", "\U0000203C", "\U00002753", "\U0001F602", "\U0001F622",
 };
 static constexpr int kTapbackTrayCount = (int)(sizeof(kTapbackTray) / sizeof(kTapbackTray[0]));
-static const char *const kTapbackLabel[] = {
-    "[+]", "[-]", "[!!]", "[?]", "[lol]", ":(",
-};
-static_assert(sizeof(kTapbackLabel) / sizeof(kTapbackLabel[0]) == kTapbackTrayCount,
-              "tapback label tray must mirror the wire tray");
 
 // ── Message Actions ──────────────────────────────────────────────────────────
 // Off on the Cardputer. The modal would add seven message-action rows to a
@@ -962,15 +964,16 @@ static_assert(sizeof(kTapbackLabel) / sizeof(kTapbackLabel[0]) == kTapbackTrayCo
 
 // The same modal opened from a chat message rather than a node row. It keeps
 // the six node actions and prepends the things that only make sense about a
-// message: the tapback reactions and Reply.
+// message: the tapback reactions, an escape to the full emoji tray, and Reply.
 //
 // One flat index space so up/down and the selection highlight need no special
 // cases — the tapbacks are rows like any other, they just render as a strip of
-// label cells above the two-column grid instead of inside it.
+// glyph cells above the two-column grid instead of inside it.
 //
-//   0 .. 5  tapback reactions (kTapbackTray / kTapbackLabel)
-//   6       Reply
-//   7 ..11  node actions, via kMsgActionNodeMap
+//   0 .. 5  tapback reactions (kTapbackTray)
+//   6       "..."  -> full emoji picker in tapback mode
+//   7       Reply
+//   8 ..12  node actions, via kMsgActionNodeMap
 //
 // Favorite is deliberately absent from message mode. It is a property of the
 // node rather than anything to do with the message, it is the one action here
@@ -983,11 +986,13 @@ static_assert(sizeof(kTapbackLabel) / sizeof(kTapbackLabel[0]) == kTapbackTrayCo
 static constexpr uint8_t kMsgActionNodeMap[] = { 0, 1, 3, 4, 5 };
 static constexpr int kMsgActionNodeCount =
     (int)(sizeof(kMsgActionNodeMap) / sizeof(kMsgActionNodeMap[0]));
-static constexpr int kMsgActionReplyIdx = kTapbackTrayCount;        // 6
-static constexpr int kMsgActionNodeBase = kMsgActionReplyIdx + 1;   // 7
-static constexpr int kMsgActionCount    = kMsgActionNodeBase + kMsgActionNodeCount;  // 12
+static constexpr int kMsgActionMoreIdx  = kTapbackTrayCount;        // 6
+static constexpr int kMsgActionReplyIdx = kMsgActionMoreIdx + 1;    // 7
+static constexpr int kMsgActionNodeBase = kMsgActionReplyIdx + 1;   // 8
+static constexpr int kMsgActionCount    = kMsgActionNodeBase + kMsgActionNodeCount;  // 13
 static constexpr char kMsgActionShortcuts[kMsgActionCount] = {
     '1', '2', '3', '4', '5', '6',   // tapbacks
+    'M',                            // more emoji
     'R',                            // reply
     'T', 'D', 'I', 'P', 'G'         // node actions, minus (F)avorite
 };
@@ -1596,7 +1601,7 @@ static void onComposeCancelPressed(lv_event_t *e);
 static void onComposeInputChanged(lv_event_t *e);
 static void updateComposeCharCount();
 static void refreshChatComposeButtonState();
-static void openSymbolPicker();
+static void openEmojiPicker(bool sendMode = false, bool symbolTray = false);
 static void closeEmojiPicker();
 static void onChatMessagePressed(lv_event_t *e);
 static void recomputeChannelHashes();
@@ -2347,8 +2352,18 @@ static void renderEmojiSafeText(const char *src, char *dst, size_t dstLen) {
             }
         }
 
-        // No emoji face compiled in any more: emoji always falls back to the
-        // ASCII stand-ins above, so a received reaction reads as text.
+        // The emoji face is back (common-400 subset): when it can draw the
+        // codepoint, pass it through and let the fallback chain render it
+        // inline. Only codepoints the face lacks fall back to the ASCII
+        // stand-ins above, so a received reaction always reads as something.
+        if (emojiFaceCovers(cp)) {
+            if (writePos + n >= dstLen) break;
+            memcpy(dst + writePos, src + i, n);
+            writePos += n;
+            dst[writePos] = '\0';
+            i += n;
+            continue;
+        }
         const char *alias = emojiAliasForCodepoint(cp);
         if (alias) {
             writePos = appendTextLiteral(dst, dstLen, writePos, alias);
@@ -2357,9 +2372,9 @@ static void renderEmojiSafeText(const char *src, char *dst, size_t dstLen) {
         }
 
         // Pass the codepoint through untouched. The chat/DM/name/preview labels
-        // draw with the CJK-fallback face (see scaledChatFont), so Chinese
-        // renders inline; everything else the faces lack shows LVGL's fallback
-        // box, same as before.
+        // draw with the fallback face (see scaledChatFont), so Chinese and
+        // covered emoji render inline; everything else the faces lack shows
+        // LVGL's fallback box, same as before.
         if (writePos + n >= dstLen) break;
         memcpy(dst + writePos, src + i, n);
         writePos += n;
@@ -20371,10 +20386,10 @@ static void openNodesActionMenuFor(uint32_t nodeId, bool msgMode, uint32_t packe
     // mode these cells can never be built, and this keeps the strip out of the
     // image entirely.
     //
-    // Labels, not glyphs: kTapbackTray holds the wire codepoints and the device
-    // has no emoji face to draw them with, so the cells show the ASCII
-    // stand-ins from kTapbackLabel instead. The wire form still goes out raw
-    // (see sendQuickEmoji), which is what other clients match against.
+    // The cells show the wire emoji itself — the emoji face is back (v4.8.3)
+    // and covers every kTapbackTray entry — through the fallback-enabled face.
+    // The wire form goes out raw (see sendQuickEmoji), which is what other
+    // clients match against.
 #if HAS_MESSAGE_ACTIONS
     if (s_nodesActionMsgMode) {
         lv_obj_t *tapRow = lv_obj_create(s_nodesActionModal);
@@ -20401,10 +20416,10 @@ static void openNodesActionMenuFor(uint32_t nodeId, bool msgMode, uint32_t packe
                                 (void *)(intptr_t)i);
 
             lv_obj_t *lbl = lv_label_create(cell);
-            lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
+            lv_obj_set_style_text_font(lbl, textFallbackFont(&lv_font_montserrat_16), 0);
             lv_obj_set_style_text_color(lbl, rowTextColor, 0);
             lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-            lv_label_set_text(lbl, kTapbackLabel[i]);
+            lv_label_set_text(lbl, kTapbackTray[i]);
             lv_obj_center(lbl);
         }
     }
@@ -25830,7 +25845,7 @@ static void openReleaseNotesModal() {
 
     lv_obj_t *body = lv_label_create(s_releaseNotesScroll);
     lv_obj_set_width(body, lv_pct(100));
-    lv_obj_set_style_text_font(body, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(body, textFallbackFont(&lv_font_montserrat_10), 0);
     lv_obj_set_style_text_color(body, lv_color_hex(0xD9E8FF), 0);
     lv_label_set_long_mode(body, LV_LABEL_LONG_WRAP);
     if (RELEASE_NOTES_TEXT[0]) {

@@ -1,10 +1,14 @@
 #include <Arduino.h>
 #include "text_fallback.h"
 #include "config.h"
+// Emoji fallback face, flash-resident (Noto Emoji, monochrome). Since v4.8.3
+// this is a common-400 subset (~207 KB); the full cmap cut was ~776 KB. See
+// tools/gen_emoji_font.py + tools/emoji_common.txt.
+#include "fonts/emoji_font.h"
 // CJK fallback face, flash-resident. Two cuts ship (see tools/gen_cjk_font.py):
-//   default          — the full 9,903-character list (~2.4 MB), for the 16 MB
-//                      boards whose OTA slots grew to ~5 MB to hold it
-//   -DCJK_FONT_SMALL — a 7,000-character list (~1.6 MB) for cardputer-cap, the
+//   default          — the full 9,903-character list, for the 16 MB boards
+//                      whose OTA slots grew to ~5 MB to hold it
+//   -DCJK_FONT_SMALL — a 5,000-character list (~1.1 MB) for cardputer-cap, the
 //                      one 8 MB flash, whose slots cap at 3.75 MB
 #if defined(CJK_FONT_SMALL)
 #include "fonts/cjk_font_small.h"
@@ -15,13 +19,14 @@
 // when LV_USE_TINY_TTF is set (see lv_conf.h). text_fallback.h already includes it.
 
 // Text sizes that carry user content (messages, names, previews) and therefore
-// need the CJK fallback. Titles/hints/splash faces are omitted deliberately —
+// need the fallback chain. Titles/hints/splash faces are omitted deliberately —
 // they don't render user text, and each extra instance costs LVGL-pool cache.
 namespace {
 struct FallbackSlot {
     const lv_font_t *base;     // built-in Montserrat face
     int32_t px;                // tiny_ttf render size to match it
     lv_font_t merged;          // mutable copy of base with the fallback attached
+    lv_font_t *emoji;          // tiny_ttf instance (owns glyph cache) — emoji
     lv_font_t *cjk;            // tiny_ttf instance (owns glyph cache) — CJK fallback
     bool ready;
 };
@@ -30,11 +35,11 @@ struct FallbackSlot {
 // scaledChatFont / kMainScreenFont / kChannelChatFont). montserrat_16 is here
 // too because reply previews and some node rows use it.
 FallbackSlot s_slots[] = {
-    { &lv_font_montserrat_10, 12, {}, nullptr, false },
-    { &lv_font_montserrat_12, 14, {}, nullptr, false },
-    { &lv_font_montserrat_14, 16, {}, nullptr, false },
-    { &lv_font_montserrat_16, 18, {}, nullptr, false },
-    { &lv_font_montserrat_18, 20, {}, nullptr, false },
+    { &lv_font_montserrat_10, 12, {}, nullptr, nullptr, false },
+    { &lv_font_montserrat_12, 14, {}, nullptr, nullptr, false },
+    { &lv_font_montserrat_14, 16, {}, nullptr, nullptr, false },
+    { &lv_font_montserrat_16, 18, {}, nullptr, nullptr, false },
+    { &lv_font_montserrat_18, 20, {}, nullptr, nullptr, false },
 };
 constexpr int kSlotCount = (int)(sizeof(s_slots) / sizeof(s_slots[0]));
 
@@ -51,14 +56,16 @@ constexpr int kSlotCount = (int)(sizeof(s_slots) / sizeof(s_slots[0]));
 //
 // So keep expressing the budget in bytes, as v8 did, and derive the count per
 // slot below. Every tiny_ttf allocation comes from the LVGL pool, so the
-// Cardputer's 96 KB pool sets the ceiling. Glyphs are re-rasterized on a cache
+// Cardputer's 80 KB pool sets the ceiling. Glyphs are re-rasterized on a cache
 // miss — slower on scroll, never a failure — so a small cache is a fine trade.
 #if defined(DEVICE_CARDPUTER_LORA_HAT)
-// Cardputer has neither PSRAM nor much flash headroom. Small cache per slot —
-// large glyphs are re-rasterized often, scroll stutters slightly.
-constexpr size_t kCjkCacheBytes = 1536;
+// Cardputer has neither PSRAM nor much flash headroom. Two tiny_ttf instances
+// per slot (emoji + CJK) still fits: ~1.5 KB + ~0.5 KB per slot of cache.
+constexpr size_t kEmojiCacheBytes = 1536;
+constexpr size_t kCjkCacheBytes   = 512;
 #else
-constexpr size_t kCjkCacheBytes = 4096;
+constexpr size_t kEmojiCacheBytes = 4096;
+constexpr size_t kCjkCacheBytes   = 2048;
 #endif
 
 // Bitmap bytes plus the lv_draw_buf_t header, LRU node and TLSF block overhead
@@ -89,35 +96,61 @@ void textFallbackFontInit() {
         FallbackSlot &s = s_slots[i];
         // Kerning is meaningless across scripts here and costs an extra
         // LVGL-pool cache per instance, so it stays off.
-        const size_t cacheGlyphs = cacheGlyphsFor(s.px, kCjkCacheBytes);
-        budgetTotal += cacheGlyphs * ((size_t)(s.px * s.px) + kGlyphEntryOverhead);
+        s.emoji = lv_tiny_ttf_create_data_ex((const void *)kEmojiFontData,
+                                             (size_t)kEmojiFontDataLen,
+                                             s.px, LV_FONT_KERNING_NONE,
+                                             cacheGlyphsFor(s.px, kEmojiCacheBytes));
+        if (s.emoji) {
+            // Copy the const base into a writable face and chain the emoji
+            // fallback. The copy shares the base's glyph data (pointers), so
+            // only the struct is duplicated; the fallback is what LVGL walks
+            // for missing glyphs: Montserrat miss → emoji tinyTTF.
+            s.merged = *s.base;
+            s.merged.fallback = s.emoji;
+        } else {
+            // Out of pool at boot: leave this size without emoji rather than
+            // half-initialize; the CJK pass below re-anchors on the base.
+            s.ready = false;
+            Serial.printf("[font] slot %d (px=%d) emoji tiny_ttf create FAILED "
+                          "(LVGL pool exhausted?)\n", i, (int)s.px);
+        }
+
+        // Chain a second fallback (CJK) past emoji. LVGL walks the fallback
+        // chain on a miss: Montserrat glyph misses → emoji tinyTTF → if still
+        // missing → CJK tinyTTF. Two tinyTTF instances per slot is the price
+        // we pay for keeping emoji and CJK in independent glyph caches.
+        const size_t cjkCacheGlyphs = cacheGlyphsFor(s.px, kCjkCacheBytes);
+        budgetTotal += cjkCacheGlyphs * ((size_t)(s.px * s.px) + kGlyphEntryOverhead);
         s.cjk = lv_tiny_ttf_create_data_ex((const void *)kCjkFontData,
                                            (size_t)kCjkFontDataLen,
                                            s.px, LV_FONT_KERNING_NONE,
-                                           cacheGlyphs);
+                                           cjkCacheGlyphs);
         if (s.cjk) {
-            // Copy the const base into a writable face and chain the fallback.
-            // The copy shares the base's glyph data (pointers), so only the
-            // struct is duplicated; the fallback is what LVGL walks for
-            // missing glyphs: Montserrat miss → CJK tinyTTF.
-            s.merged = *s.base;
-            s.merged.fallback = s.cjk;
-            s.ready = true;
+            if (s.emoji) {
+                s.emoji->fallback = s.cjk;
+                s.ready = true;
+            } else {
+                // Emoji init failed: hang CJK off the base directly so CJK
+                // text still renders at this size.
+                s.merged = *s.base;
+                s.merged.fallback = s.cjk;
+                s.ready = true;
+            }
             readyCount++;
         } else {
-            // Out of pool at boot: leave this size on the plain base rather
-            // than half-initialize. textFallbackFont() returns the plain base
-            // for it, so CJK text shows tofu boxes at that size only.
-            Serial.printf("[font] slot %d (px=%d) tiny_ttf create FAILED "
+            // CJK create failed: leave the chain as-is (emoji only or unhooked
+            // base), don't break what works.
+            Serial.printf("[font] slot %d (px=%d) cjk tiny_ttf create FAILED "
                           "(LVGL pool exhausted?)\n", i, (int)s.px);
         }
     }
-    Serial.printf("[font] init: %d/%d fallback faces ready (cjk %u bytes; "
-                  "glyph cache budget ~%u bytes of LVGL pool)\n",
+    Serial.printf("[font] init: %d/%d fallback faces ready (emoji %u bytes, "
+                  "cjk %u bytes; glyph cache budget ~%u bytes of LVGL pool)\n",
                   readyCount, kSlotCount,
-                  (unsigned)kCjkFontDataLen, (unsigned)budgetTotal);
+                  (unsigned)kEmojiFontDataLen, (unsigned)kCjkFontDataLen,
+                  (unsigned)budgetTotal);
 #else
-    Serial.println("[font] LV_USE_TINY_TTF is 0 — cjk fallback disabled");
+    Serial.println("[font] LV_USE_TINY_TTF is 0 — emoji/cjk fallback disabled");
 #endif
 }
 
@@ -132,4 +165,18 @@ const lv_font_t *textFallbackFont(const lv_font_t *base) {
     }
 #endif
     return base;
+}
+
+bool emojiFaceCovers(uint32_t cp) {
+#if LV_USE_TINY_TTF
+    if (!s_slots[0].emoji) return false;
+    // Glyph presence is independent of the render size, so slot 0's instance
+    // answers for the face. (Another px would rasterize nothing here — the
+    // query walks the face's cmap, not the cache.)
+    lv_font_glyph_dsc_t dsc;
+    return lv_font_get_glyph_dsc(s_slots[0].emoji, &dsc, (uint32_t)cp, (uint32_t)cp);
+#else
+    (void)cp;
+    return false;
+#endif
 }

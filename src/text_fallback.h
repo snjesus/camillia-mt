@@ -1,19 +1,20 @@
 #pragma once
-// User-text fallback face support (CJK).
+// User-text fallback face support (emoji + CJK).
 //
 // LVGL resolves a glyph the current font lacks by walking lv_font_t::fallback.
 // We can't set that field on the const built-in Montserrat faces, so at startup
 // we make a mutable copy of each text size and point its fallback at an
-// lv_tiny_ttf instance of the same size, backed by a flash-resident Source Han
-// Sans SC face (src/fonts/cjk_font.h) covering the full Jun Da frequency list.
-// Chinese text then draws inline wherever the message, name, or preview
-// contains it — no per-call-site handling.
+// lv_tiny_ttf instance of the same size — a monochrome Noto Emoji face
+// (src/fonts/emoji_font.h), which itself chains into a Source Han Sans SC face
+// (src/fonts/cjk_font.h) for Chinese. Emoji and Chinese text then draw inline
+// wherever the message, name, or preview contains them — no per-call-site
+// handling.
 //
-// Naming note: a monochrome emoji face used to be chained in front of the CJK
-// face here. It was removed (its 2.4 MB of flash went to the full 9,903-char
-// CJK face) and this module renamed from emoji_font.* accordingly. Emoji
-// codepoints — including tapback reactions — now render as the missing-glyph
-// box; the reactions are still sent and understood on the wire.
+// History: this module was named emoji_font.* and carried only the emoji face
+// until v4.8.0, which dropped that face and renamed the module for the CJK-only
+// era (v4.8.0-v4.8.2). v4.8.3 brought the emoji face back — as a common-400
+// subset — and re-chained it in front of the CJK face.
+#include <stdint.h>
 #include <lvgl.h>
 
 // Build the fallback-enabled Montserrat copies + tiny_ttf instances. Call once
@@ -25,3 +26,7 @@ void textFallbackFontInit();
 // fonts (or a build with the fallback disabled) return `base` unchanged, so
 // callers can wrap unconditionally.
 const lv_font_t *textFallbackFont(const lv_font_t *base);
+
+// True when the emoji face can draw this codepoint (render size independent).
+// Used to decide pass-through vs ASCII-alias in renderEmojiSafeText().
+bool emojiFaceCovers(uint32_t cp);
