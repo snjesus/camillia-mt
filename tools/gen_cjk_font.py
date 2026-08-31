@@ -12,13 +12,15 @@ Subset: the N most frequent Simplified-Chinese characters (Jun Da's Modern
 WHY THIS SIZE
 -------------
 16 MB boards (tdeck, tlora-pager-tft, heltec-v4, heltec-v4-vertical, m9,
-mesh-deck, square) carry the FULL 9,903-character list (~2.4 MB of flash as
-desubroutinized CFF outlines, ~240 B/codepoint at this depth). That only fits
-because their OTA slots grew to 0x4E0000 (~5 MB) in partitions.csv /
-partitions_16mb_fs.csv / partitions_pager_fs.csv — the mono emoji face those
-slots used to share was only 776 KB of flash, so a full face never fit the old
-3.125 MB slots. Boards must move to the grown tables via one full USB flash of
-a factory image; after that, on-device OTA keeps working.
+mesh-deck, square) carry a 7,000-character list (~1.6 MB of flash as
+desubroutinized CFF outlines). Until v4.8.4 they had the FULL 9,903-character
+list (~2.4 MB) — the pager gave those characters up in v4.8.5 to fit the full
+1,489-codepoint Noto Emoji cmap (~776 KB) alongside: 7000-char CJK + full
+emoji lands the pager at ~93 % of its 0x4E0000 (~5 MB) OTA slot. The other
+16 MB envs keep the same 7,000-char default face and pair it with the
+compact 400-common emoji cut (-DEMOJI_FONT_COMPACT). Boards must move to the
+grown tables via one full USB flash of a factory image; after that, on-device
+OTA keeps working.
 
 cardputer-cap is the exception: it is the one 8 MB flash and cannot take two
 ~5 MB slots. It uses partitions_cardputer.csv (0x3C0000 slots, the most an

@@ -2,25 +2,27 @@
 #include "text_fallback.h"
 #include "config.h"
 // Emoji fallback face, flash-resident (Noto Emoji, monochrome). Two cuts ship
-// (selected via platformio.ini build_flags — see CJK_FONT_SMALL pairing):
-//   default              — 400-common subset (~212 KB), for 16 MB boards whose
-//                          ~5 MB OTA slot already holds the full 9,903-char CJK
-//                          face and adding ~776 KB of full emoji would blow the
-//                          slot ceiling by >400 KB.
-//   -DEMOJI_FONT_FULL    — the full Noto Emoji cmap (all 1489 renderable
-//                          codepoints, ~776 KB). Cardputer pairs it with the
-//                          5,000-char CJK small face (flash 99.1 %, ~34 KB
-//                          headroom). ZWJ ligatures and regional-indicator flag
-//                          pairs still need GSUB (we strip layout tables), so
-//                          those composite sequences never render regardless.
+// (selected via platformio.ini build_flags):
+//   default              — the full Noto Emoji cmap (all 1489 renderable
+//                          codepoints, ~776 KB). Used by cardputer-cap (paired
+//                          with the 5,000-char CJK small face, 99.1 % slot) and
+//                          tlora-pager-tft (paired with the 7,000-char default
+//                          CJK face, ~93 % slot) since v4.8.5.
+//   -DEMOJI_FONT_COMPACT — the 400-common subset (~212 KB), for the remaining
+//                          16 MB boards. ZWJ ligatures and regional-indicator
+//                          flag pairs still need GSUB (we strip layout tables),
+//                          so those composite sequences never render regardless
+//                          of cut.
 #if defined(EMOJI_FONT_COMPACT)
 #include "fonts/emoji_font_compact.h"
 #else
 #include "fonts/emoji_font.h"
 #endif
 // CJK fallback face, flash-resident. Two cuts ship (see tools/gen_cjk_font.py):
-//   default          — the full 9,903-character list, for the 16 MB boards
-//                      whose OTA slots grew to ~5 MB to hold it
+//   default          — a 7,000-character list (~1.6 MB) for the 16 MB boards;
+//                      trimmed from the full 9,903 list in v4.8.5 so the pager
+//                      could take the full emoji face, and kept by the other
+//                      16 MB envs (which pair it with the compact emoji cut)
 //   -DCJK_FONT_SMALL — a 5,000-character list (~1.1 MB) for cardputer-cap, the
 //                      one 8 MB flash, whose slots cap at 3.75 MB
 #if defined(CJK_FONT_SMALL)
