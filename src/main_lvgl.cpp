@@ -7496,7 +7496,7 @@ static void composeImeRefreshBar() {
         return;
     }
     if (!wubi_ime::hasComposition()) {
-        lv_label_set_text_fmt(s_composeImeCands, "CN: a-y 五笔  1-%d 选字",
+        lv_label_set_text_fmt(s_composeImeCands, "CN: a-y 五笔/词组  1-%d 选字",
                               wubi_ime::kPageSize);
         return;
     }
@@ -7601,12 +7601,11 @@ static bool composeImeHandleKey(char k) {
     }
     if (k >= '1' && k <= '5' && wubi_ime::hasComposition()) {
         const int idx = wubi_ime::page() * wubi_ime::kPageSize + (k - '1');
-        char out[4] = {0};
+        char out[wubi_ime::kMaxCandidateBytes] = {0};
         if (idx < wubi_ime::candidateCount() && wubi_ime::commitIndex(idx, out)
             && s_composeInput) {
             lv_textarea_add_text(s_composeInput, out);
-            Serial.printf("[ime] pick #%d -> '%s' (U+%02X%02X%02X)\n", k - '1' + 1,
-                          out, (uint8_t)out[0], (uint8_t)out[1], (uint8_t)out[2]);
+            Serial.printf("[ime] pick #%d -> \"%s\"\n", k - '1' + 1, out);
         } else {
             Serial.printf("[ime] pick #%d out of range (count=%d page=%d)\n",
                           k - '1' + 1, wubi_ime::candidateCount(), wubi_ime::page());
@@ -7615,10 +7614,10 @@ static bool composeImeHandleKey(char k) {
         return true;
     }
     if (k == ' ' && wubi_ime::hasComposition()) {
-        char out[4] = {0};
+        char out[wubi_ime::kMaxCandidateBytes] = {0};
         if (wubi_ime::commitFirst(out) && s_composeInput) {
             lv_textarea_add_text(s_composeInput, out);
-            Serial.printf("[ime] space commit -> '%s'\n", out);
+            Serial.printf("[ime] space commit -> \"%s\"\n", out);
         } else if (s_composeInput) {
             // No candidate matched the current composition (e.g. user typed a
             // non-wubi sequence on purpose). Clear the buffer and insert a
@@ -8329,7 +8328,7 @@ static void openComposePrompt(uint32_t replyPacketId,
     composeInputHost = composeCenterBand;
 #endif
 
-    // Pinyin IME bar, placed before the textarea inside the centre band so the
+    // Wubi-86 IME bar, placed before the textarea inside the centre band so the
     // band's flex column allocates it its fixed 18 px first and lets the
     // textarea flex-grow=1 take whatever remains. If the IME bar came AFTER the
     // input on a band board, the input's flex-grow would eat every pixel of
@@ -8340,6 +8339,7 @@ static void openComposePrompt(uint32_t replyPacketId,
     // the composeInputHost); they have no growing input so the order there
     // does not matter either way.
     composeCreateImeBar(composeInputHost);
+    (void)wubi_ime::ensureInit();   // decompresses the WBI2 table into PSRAM.
 
     s_composeInput = lv_textarea_create(composeInputHost);
     if (!s_composeInput) {
