@@ -112,14 +112,21 @@ static constexpr char CARDPUTER_HID_ARROW_RIGHT = 0x4F;
 
 static char normalizeCardputerKey(char key) {
     uint8_t raw = (uint8_t)key;
-    if (raw == (uint8_t)CARDPUTER_HID_ENTER || raw == 0x0D || raw == 0x0A) return KEY_ENTER;
-    if (raw == (uint8_t)CARDPUTER_HID_ESCAPE || raw == 0x1B) return KEY_ESCAPE;
-    if (raw == (uint8_t)CARDPUTER_HID_BACKSPACE || raw == (uint8_t)CARDPUTER_HID_DELETE
-        || raw == 0x08 || raw == 0x7F) return KEY_BACKSPACE;
-    if (raw == (uint8_t)CARDPUTER_HID_ARROW_UP) return KEY_SCROLL_UP;
-    if (raw == (uint8_t)CARDPUTER_HID_ARROW_DOWN) return KEY_SCROLL_DN;
-    if (raw == (uint8_t)CARDPUTER_HID_ARROW_LEFT) return KEY_PREV_CHAN;
-    if (raw == (uint8_t)CARDPUTER_HID_ARROW_RIGHT) return KEY_NEXT_CHAN;
+    // Only control characters and the firmware's own sentinel values are
+    // normalised here. Printable ASCII must pass through unchanged: the
+    // M5Cardputer library delivers printable keys as ASCII in status.word, and
+    // several ASCII code points collide with HID usage codes that this function
+    // used to match — 'P'=0x50=ArrowLeft, 'L'=0x4C=Delete, 'O'=0x4F=ArrowRight,
+    // 'Q'=0x51=ArrowDown, 'R'=0x52=ArrowUp, '('=0x28=Enter, ')'=0x29=Escape,
+    // '*'=0x2A=Backspace. Matching those HID codes ate the printable char, so
+    // Shift+P (and Shift+L/O/Q/R, and the shifted ()* symbols) could not be
+    // typed — e.g. uppercase P became KEY_PREV_CHAN instead of 'P'. Raw HID
+    // codes never reach this function: the hid_keys loop in pumpCardputerKeys()
+    // translates them to sentinels before enqueueing, so the HID constants
+    // below were dead code that only collides with printable ASCII.
+    if (raw == 0x0D || raw == 0x0A) return KEY_ENTER;
+    if (raw == 0x1B) return KEY_ESCAPE;
+    if (raw == 0x08 || raw == 0x7F) return KEY_BACKSPACE;
     return key;
 }
 
