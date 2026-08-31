@@ -5,11 +5,12 @@
 // Release notes for the build this firmware was cut from, shown by the
 // Release Notes entry in the config screen. Empty when no notes were
 // available at build time (a plain dev build, typically).
-static const char RELEASE_NOTES_TEXT[] = R"CAMNOTES(- 16MB  T-Lora Pager 9,903  99.9% Cardputer  8MB  7,000  99.6%
-- OTA 16MB  5MBCardputer  3.75MB
+static const char RELEASE_NOTES_TEXT[] = R"CAMNOTES(- 86v4.8.1 7,000 10,700+  111KB/`,`/`.`  1-3/1-5 Z  z rime/rime-wubiwubi86.dict.yamlLGPL-3.0
 
+v4.8.0
+- 16MB  T-Lora Pager 9,903  99.9% Cardputer  8MB  7,000  99.6%
+- OTA 16MB  5MBCardputer  3.75MB
 -  emoji    'E'
 - tapback [+]/[-]/[!!]/[?]/[lol]/:(
--  USB  OTA  OTA
-
+-  v4.7.x  USB  OTA  OTA
 -  square)CAMNOTES";

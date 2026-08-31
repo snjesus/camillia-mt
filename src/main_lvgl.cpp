@@ -28,7 +28,7 @@
 #include "gps.h"
 #include "los.h"
 #include "keyboard.h"
-#include "pinyin_ime.h"   // compose-screen pinyin IME over the PYI1 table
+#include "wubi_ime.h"    // compose-screen wubi-86 IME over the WBI1 table
 #if defined(DEVICE_MESH_DECK)
 #include "aw9523.h"   // FT6636 reset sits on an expander, released at boot
 #endif
@@ -264,9 +264,9 @@ static int s_emojiPickerCols = 1;
 static int      s_emojiPickerRepeatDelta = 0;
 static uint32_t s_emojiPickerRepeatLastMs = 0;
 static lv_obj_t *s_composeCharCount = nullptr;
-// Pinyin IME bar: one row between the input and the legend -- a 中/EN toggle
+// Wubi IME bar: one row between the input and the legend -- a 中/EN toggle
 // button plus the composition + candidate cells. The row lives and dies with
-// the compose modal; the engine state behind it (pinyin_ime) survives so the
+// the compose modal; the engine state behind it (wubi_ime) survives so the
 // CN/EN choice sticks across compose sessions.
 static lv_obj_t *s_composeImeBar = nullptr;
 static lv_obj_t *s_composeImeToggleLbl = nullptr;
@@ -7465,27 +7465,27 @@ static void closeComposePrompt() {
     s_composeImeCands = nullptr;
     // A half-typed composition is meaningless once the box is gone; the CN/EN
     // mode itself is deliberately kept so the next compose opens the same way.
-    pinyin_ime::reset();
+    wubi_ime::reset();
     s_composeTarget = COMPOSE_TARGET_CHANNEL;
     s_composeDmNodeId = 0;
     s_composeReplyPacketId = 0;
     s_composeChannelIdx = s_activeChannel;
 }
 
-// ── Pinyin IME bar ────────────────────────────────────────────────────────────
+// ── Wubi IME bar ─────────────────────────────────────────────────────────────
 // One row under the compose input: a 中/EN toggle button and, in CN mode, the
-// live composition plus the current page of candidates ("ni: 1.你 2.呢 ...").
+// live composition plus the current page of candidates ("vv: 1.所 2.改 ...").
 // All rendering goes through the CJK-fallback face, which covers every
-// candidate the generator can emit (tools/gen_pinyin_ime.py filters to the
+// candidate the generator can emit (tools/gen_wubi_ime.py filters to the
 // font's codepoints), so no candidate ever rasterizes as a missing glyph.
 
 static void composeImeRefreshBar() {
     if (!s_composeImeBar) return;
     if (s_composeImeToggleLbl) {
-        lv_label_set_text(s_composeImeToggleLbl, pinyin_ime::enabled() ? "中" : "EN");
+        lv_label_set_text(s_composeImeToggleLbl, wubi_ime::enabled() ? "中" : "EN");
     }
     if (!s_composeImeCands) return;
-    if (!pinyin_ime::enabled()) {
+    if (!wubi_ime::enabled()) {
         // Keep the bar visible as the feature's only discoverable affordance:
         // the toggle button plus a hint naming the keyboard chord.
 #if defined(DEVICE_TLORA_PAGER_TFT)
@@ -7495,37 +7495,37 @@ static void composeImeRefreshBar() {
 #endif
         return;
     }
-    if (!pinyin_ime::hasComposition()) {
-        lv_label_set_text_fmt(s_composeImeCands, "CN: a-z 拼音  1-%d 选字",
-                              pinyin_ime::kPageSize);
+    if (!wubi_ime::hasComposition()) {
+        lv_label_set_text_fmt(s_composeImeCands, "CN: a-y 五笔  1-%d 选字",
+                              wubi_ime::kPageSize);
         return;
     }
     char buf[160];
-    int n = snprintf(buf, sizeof(buf), "%s:", pinyin_ime::composition());
+    int n = snprintf(buf, sizeof(buf), "%s:", wubi_ime::composition());
     if (n < 0 || n >= (int)sizeof(buf)) {
-        lv_label_set_text(s_composeImeCands, pinyin_ime::composition());
+        lv_label_set_text(s_composeImeCands, wubi_ime::composition());
         return;
     }
-    const int first = pinyin_ime::page() * pinyin_ime::kPageSize;
-    int last = first + pinyin_ime::kPageSize;
-    if (last > pinyin_ime::candidateCount()) last = pinyin_ime::candidateCount();
+    const int first = wubi_ime::page() * wubi_ime::kPageSize;
+    int last = first + wubi_ime::kPageSize;
+    if (last > wubi_ime::candidateCount()) last = wubi_ime::candidateCount();
     for (int i = first; i < last; ++i) {
-        const char *hz = pinyin_ime::candidate(i);
+        const char *hz = wubi_ime::candidate(i);
         if (!hz) break;
         int w = snprintf(buf + n, sizeof(buf) - (size_t)n, " %d.%s", i - first + 1, hz);
         if (w < 0 || n + w >= (int)sizeof(buf)) break;
         n += w;
     }
-    if (pinyin_ime::pageCount() > 1) {
+    if (wubi_ime::pageCount() > 1) {
         snprintf(buf + n, sizeof(buf) - (size_t)n, " %d/%d",
-                 pinyin_ime::page() + 1, pinyin_ime::pageCount());
+                 wubi_ime::page() + 1, wubi_ime::pageCount());
     }
     lv_label_set_text(s_composeImeCands, buf);
 }
 
 static void composeImeTogglePressed(lv_event_t *e) {
     LV_UNUSED(e);
-    pinyin_ime::toggle();
+    wubi_ime::toggle();
     composeImeRefreshBar();
 }
 
@@ -7580,87 +7580,87 @@ static bool composeImeHandleKey(char k) {
         const uint32_t now = millis();
         if ((uint32_t)(now - s_imeToggleLastMs) >= 300UL) {
             s_imeToggleLastMs = now;
-            const bool becameCn = pinyin_ime::toggle();
+            const bool becameCn = wubi_ime::toggle();
             Serial.printf("[ime] toggle -> %s\n", becameCn ? "CN" : "EN");
             composeImeRefreshBar();
         }
         return true;
     }
-    if (!pinyin_ime::enabled()) return false;
+    if (!wubi_ime::enabled()) return false;
 
     if (k >= 'A' && k <= 'Z') k = (char)(k - 'A' + 'a');   // feedLetter folds too
     if (k >= 'a' && k <= 'z') {
         // Letters never fall through in CN mode: an unmatchable composition
         // simply shows an empty candidate list instead of typing itself.
-        pinyin_ime::feedLetter(k);
-        const int cc = pinyin_ime::candidateCount();
+        wubi_ime::feedLetter(k);
+        const int cc = wubi_ime::candidateCount();
         Serial.printf("[ime] feed '%c' -> \"%s\" candidates=%d\n", k,
-                      pinyin_ime::composition(), cc);
+                      wubi_ime::composition(), cc);
         composeImeRefreshBar();
         return true;
     }
-    if (k >= '1' && k <= '5' && pinyin_ime::hasComposition()) {
-        const int idx = pinyin_ime::page() * pinyin_ime::kPageSize + (k - '1');
+    if (k >= '1' && k <= '5' && wubi_ime::hasComposition()) {
+        const int idx = wubi_ime::page() * wubi_ime::kPageSize + (k - '1');
         char out[4] = {0};
-        if (idx < pinyin_ime::candidateCount() && pinyin_ime::commitIndex(idx, out)
+        if (idx < wubi_ime::candidateCount() && wubi_ime::commitIndex(idx, out)
             && s_composeInput) {
             lv_textarea_add_text(s_composeInput, out);
             Serial.printf("[ime] pick #%d -> '%s' (U+%02X%02X%02X)\n", k - '1' + 1,
                           out, (uint8_t)out[0], (uint8_t)out[1], (uint8_t)out[2]);
         } else {
             Serial.printf("[ime] pick #%d out of range (count=%d page=%d)\n",
-                          k - '1' + 1, pinyin_ime::candidateCount(), pinyin_ime::page());
+                          k - '1' + 1, wubi_ime::candidateCount(), wubi_ime::page());
         }
         composeImeRefreshBar();
         return true;
     }
-    if (k == ' ' && pinyin_ime::hasComposition()) {
+    if (k == ' ' && wubi_ime::hasComposition()) {
         char out[4] = {0};
-        if (pinyin_ime::commitFirst(out) && s_composeInput) {
+        if (wubi_ime::commitFirst(out) && s_composeInput) {
             lv_textarea_add_text(s_composeInput, out);
             Serial.printf("[ime] space commit -> '%s'\n", out);
         } else if (s_composeInput) {
             // No candidate matched the current composition (e.g. user typed a
-            // non-pinyin sequence on purpose). Clear the buffer and insert a
+            // non-wubi sequence on purpose). Clear the buffer and insert a
             // regular space instead of silently swallowing a space keypress.
-            pinyin_ime::reset();
+            wubi_ime::reset();
             lv_textarea_add_text(s_composeInput, " ");
             Serial.printf("[ime] space (no candidate) -> space\n");
         }
         composeImeRefreshBar();
         return true;
     }
-    if ((k == KEY_BACKSPACE || k == KEY_BACKSPACE_HOLD) && pinyin_ime::hasComposition()) {
+    if ((k == KEY_BACKSPACE || k == KEY_BACKSPACE_HOLD) && wubi_ime::hasComposition()) {
         // KEY_BACK_BTN deliberately not here: the M9's Back keeps its
         // "abandon the draft and close" meaning even with a composition up.
-        pinyin_ime::feedBackspace();
-        Serial.printf("[ime] backspace -> \"%s\"\n", pinyin_ime::composition());
+        wubi_ime::feedBackspace();
+        Serial.printf("[ime] backspace -> \"%s\"\n", wubi_ime::composition());
         composeImeRefreshBar();
         return true;
     }
-    if (k == KEY_ENTER && pinyin_ime::hasComposition()) {
+    if (k == KEY_ENTER && wubi_ime::hasComposition()) {
         // IME convention: Enter commits the raw letters rather than sending.
-        if (s_composeInput) lv_textarea_add_text(s_composeInput, pinyin_ime::composition());
-        Serial.printf("[ime] enter raw commit -> \"%s\"\n", pinyin_ime::composition());
-        pinyin_ime::reset();
+        if (s_composeInput) lv_textarea_add_text(s_composeInput, wubi_ime::composition());
+        Serial.printf("[ime] enter raw commit -> \"%s\"\n", wubi_ime::composition());
+        wubi_ime::reset();
         composeImeRefreshBar();
         return true;
     }
-    if (k == KEY_ESCAPE && pinyin_ime::hasComposition()) {
-        pinyin_ime::reset();
+    if (k == KEY_ESCAPE && wubi_ime::hasComposition()) {
+        wubi_ime::reset();
         Serial.printf("[ime] escape -> reset\n");
         composeImeRefreshBar();
         return true;
     }
-    if (pinyin_ime::hasComposition()
+    if (wubi_ime::hasComposition()
         && (k == KEY_PREV_CHAN || k == KEY_NEXT_CHAN || k == ',' || k == '.')) {
         // ',' / '.' work bare here: the Fn chords for these never fire (the
         // library leaves `word` empty while Fn is held — see pumpCardputerKeys),
         // and with a live composition the two keys have no better meaning in
         // the draft anyway. '.' / KEY_NEXT_CHAN page forward.
-        if (k == KEY_NEXT_CHAN || k == '.') pinyin_ime::nextPage();
-        else pinyin_ime::prevPage();
-        Serial.printf("[ime] page -> %d/%d\n", pinyin_ime::page() + 1, pinyin_ime::pageCount());
+        if (k == KEY_NEXT_CHAN || k == '.') wubi_ime::nextPage();
+        else wubi_ime::prevPage();
+        Serial.printf("[ime] page -> %d/%d\n", wubi_ime::page() + 1, wubi_ime::pageCount());
         composeImeRefreshBar();
         return true;
     }

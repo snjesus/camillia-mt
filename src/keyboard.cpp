@@ -399,7 +399,7 @@ char tloraReadMappedKey() {
             continue;
         }
 
-        // Sym+Space toggles the pinyin IME — this board's counterpart to the
+        // Sym+Space toggles the wubi IME — this board's counterpart to the
         // Cardputer's Fn+Space. Must be checked here, before tloraTranslateKey():
         // the modifier state is one-shot and consumed by the next mapped press,
         // so inside the translator the chord would just arm, type a bare space
