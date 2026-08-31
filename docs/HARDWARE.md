@@ -4,9 +4,11 @@ Camillia has **seven distinct boards** across eight build envs (the two Heltec
 envs are the same hardware, different UI orientation). The comparison table
 below covers six of them. All share an
 **ESP32-S3** SoC (dual-core Xtensa LX7 @ 240 MHz, 512 KB internal SRAM), the
-`espressif32@7.0.1` / Arduino toolchain, and a **dual-slot OTA** flash layout — two
-3.125 MB app partitions (`app0`/`app1`) + 64 KB NVS + 64 KB coredump
-([partitions.csv](../partitions.csv)). The table below captures what differs.
+`espressif32@7.0.1` / Arduino toolchain, and a **dual-slot OTA** flash layout —
+two ~5 MB app partitions (`app0`/`app1`) on 16 MB boards + 64 KB NVS + 64 KB
+coredump ([partitions.csv](../partitions.csv)); the 8 MB Cardputer uses
+[partitions_cardputer.csv](../partitions_cardputer.csv) with 3.75 MB slots.
+The table below captures what differs.
 
 The Attaky Mesh Deck (`mesh-deck`) ships but is not yet in the comparison table; its
 pin map is in [`src/hal/hw_mesh_deck.h`](../src/hal/hw_mesh_deck.h).
@@ -28,7 +30,7 @@ and its [`src/hal/hw_*.h`](../src/hal/) pin map.
 | **Audio** | I²S speaker amp (MAX98357A / NS4168) | ES8311 I²S codec + speaker | M5Stack speaker driver (tones) | Passive buzzer (GPIO PWM) | Passive buzzer (GPIO PWM) | ES8311 speaker notifications with volume/style controls; ES7243E microphone not yet used |
 | **Battery sensing** | ADC resistor divider on GPIO4 | BQ25896 charger / fuel-gauge over I²C (no ADC pin) | 1520 mAh (120 mAh internal + 1400 mAh in base); read via M5Unified | ADC divider on GPIO1 + switched sense-enable (auto-polarity) | 2300 mAh cell; plain 1:2 ADC divider on GPIO13, no sense gate | ADS1115 AIN0 at 0x48, `GAIN_TWO`, 2:1 divider and PCA9555 sense gate; hardware comparison pending |
 | **Onboard sensors / extras** | Microphone | BHI260AP IMU + AI sensor, ST25R3916 NFC, RTC (onboard; not yet used by Camillia) | Microphone (via M5Unified) | BME280 / BMP280 / AHT20 — auto-detected over I²C (temp/humidity/pressure) | PCF8563 RTC, QMI8658 IMU, QMC6309 compass (peripheral I²C; not yet used by Camillia), keypad backlight | PCA9555-gated LCD, GNSS, SD, Grove, USB OTG and audio rails |
-| **microSD** | Yes (shared LoRa SPI) | Yes (shared SPI) | Yes (shared LoRa SPI) | No — a 9.5 MB LittleFS partition in flash holds the same files (`partitions_16mb_fs.csv`) | Yes (shared LoRa SPI) | Yes — 1-bit SD_MMC on CLK 2 / CMD 3 / D0 1, powered by PCA9555 bit 14 |
+| **microSD** | Yes (shared LoRa SPI) | Yes (shared SPI) | Yes (shared LoRa SPI) | No — a LittleFS partition in flash holds the same files (`partitions_16mb_fs.csv`) | Yes (shared LoRa SPI) | Yes — 1-bit SD_MMC on CLK 2 / CMD 3 / D0 1, powered by PCA9555 bit 14 |
 | **Sensor / GPIO headroom** | Minimal — one SPI bus shared by LoRa/TFT/SD, I²C runs keyboard/touch/trackball, UART is GPS; `USER_BUTTON_PIN = -1` | Minimal — most rails are XL9555-managed | Grove port available (may be claimed by the LoRa/GPS cap) | **Most headers exposed** — best candidate for add-on sensors (e.g. the Detection Sensor module) | Minimal — one SPI bus shared by LoRa/TFT/SD, two I²C buses already claimed, UART is GPS | Switched Grove rail available; shared I²C bus is already heavily used |
 | **Vendor** | [LilyGo T-Deck](https://www.lilygo.cc/products/t-deck) | [LilyGo T-Lora Pager](https://lilygo.cc/products/t-lora-pager) | [M5Stack Cardputer](https://shop.m5stack.com/products/m5stack-cardputer-kit-w-m5stamps3) + Cap LoRa/GPS | [Heltec WiFi LoRa 32 V4](https://heltec.org/project/wifi-lora-32-v4/) + TFT expansion kit | [Elecrow ThinkNode M9](https://www.elecrow.com/thinknode-m9-meshcore-communication-terminal-with-full-keyboard-2-4inch-lcd-esp32-s3-lr1110-gps-2300mah.html) | Unreleased; public codename `square` |
 

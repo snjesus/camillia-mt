@@ -97,7 +97,7 @@ You can also run the script with no flags and pick a device from the prompt.
 |---|---|
 | Platform | espressif32 7.0.1 |
 | Framework | Arduino |
-| Flash | 16 MB, dual-slot OTA partitions (8 MB on Cardputer). Mesh Deck and Heltec use `partitions_16mb_fs.csv`, which adds a 9.5 MB LittleFS partition after the app slots; Square uses the standard table and stores files on SD_MMC |
+| Flash | 16 MB, dual-slot OTA partitions — ~5 MB app slots since v4.8.0 (3.75 MB on the 8 MB Cardputer). Mesh Deck, Heltec V4 Vertical and Square use `partitions_16mb_fs.csv`, which adds a trailing LittleFS partition after the app slots; Square also stores files on SD_MMC |
 | PSRAM | enabled (OPI; none on Cardputer) |
 | Upload speed | 115200 |
 
@@ -151,6 +151,24 @@ build again.
   but the ROM banner and `entry 0x403c98d0`, over and over — no bootloader log,
   no panic, no app output. The same note is on the mesh-deck env, which hit it
   first.
+
+### v4.8.0 分区扩大与升级说明
+
+- 为容纳全量中文字库（思源黑体 9,903 字，约 2.4MB），v4.8.0 扩大了 OTA 应用槽：
+  16MB 机型约 5MB（`partitions.csv` / `partitions_16mb_fs.csv` /
+  `partitions_pager_fs.csv`，槽位 0x4E0000），Cardputer（8MB 闪存）扩到 3.75MB
+  （`partitions_cardputer.csv`，槽位 0x3C0000，配 7,000 字字库
+  `cjk_font_small.h`）。
+- **从 v4.7.x 或更早版本升级必须用 USB 全量刷写出厂镜像**（`dist/` 下不带
+  `-ota` 后缀的 `.bin`）。OTA 只写应用槽，不会重写 0x8000 处的分区表，旧表上
+  无法容纳新固件。
+- **NVS 偏移随分区表移动了**（旧表 0x650000 / pager 旧表 0x710000 → 新表
+  0x9D0000 / Cardputer 0x790000），全量刷写后节点名、频道密钥、WiFi 配置等
+  会全部重置。刷机前先在 CFG 页把配置导出到 SD 卡 `/camillia/config.yaml`，
+  刷完后重新连上 AP 再导入即可；没有 SD 卡槽的机型只能手工重配。
+- T-Lora Pager 的内部 LittleFS 备用存储随分区表缩小（8.8MB → 6.1MB），首次
+  挂载会自动重建，原有离线数据不保留。
+- 全量刷写一次后，设备间 OTA 恢复正常，后续版本不再需要 USB。
 
 ### ThinkNode M9
 

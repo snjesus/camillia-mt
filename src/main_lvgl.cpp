@@ -23,7 +23,7 @@
 #include "dm_mgr.h"
 #include "ignore_list.h"
 #include "battery_util.h"
-#include "emoji_font.h"
+#include "text_fallback.h"
 #include "env_sensor.h"
 #include "gps.h"
 #include "los.h"
@@ -112,10 +112,11 @@
 #endif
 
 // LVGL runs entirely on the Arduino loopTask (lv_timer_handler below), and the
-// default 8 KB loopTask stack is not enough to rasterize an emoji under LVGL 9.
+// default 8 KB loopTask stack is not enough to rasterize a fallback glyph under
+// LVGL 9.
 //
 // Rendering a character the built-in Montserrat face lacks falls through to the
-// tiny_ttf/stb_truetype fallback (see emoji_font.*), which is by far the
+// tiny_ttf/stb_truetype fallback (see text_fallback.*), which is by far the
 // deepest path in the firmware:
 //
 //   lv_timer_handler -> lv_display_refr_timer -> lv_obj_refr -> lv_obj_redraw
@@ -126,9 +127,9 @@
 //
 // That is ~5-6 KB worst case. It fit under LVGL 8 only barely; v9's draw
 // pipeline (draw tasks/units) sits about 0.5-1 KB deeper and pushed it over,
-// which is why a DM containing an emoji aborted with a loopTask stack overflow
-// while plain ASCII — served from pre-rasterized Montserrat bitmaps, no stb
-// involvement at all — was fine.
+// which is why a message containing a CJK glyph aborted with a loopTask stack
+// overflow while plain ASCII — served from pre-rasterized Montserrat bitmaps,
+// no stb involvement at all — was fine.
 //
 // Costs 8 KB of internal RAM. Verify headroom with the stack high-water mark
 // reported by logLvglMemDiag().
@@ -254,22 +255,14 @@ static lv_obj_t *s_composeKeyboard = nullptr;
 static lv_obj_t *s_emojiPickerBackdrop = nullptr;
 static lv_obj_t *s_emojiPickerModal = nullptr;
 static int s_emojiPickerSelection = 0;
-// Send mode: picking fires a one-emoji message and closes the tray (the 'e'
-// browse shortcut on keyboard builds). Insert mode: picking appends to the open
-// compose box and keeps the tray up (the touch-only in-compose 😀 button).
-static bool s_emojiPickerSendMode = false;
-// Cells per row in the tray, computed when it is built (see openEmojiPicker), so
-// up/down step a row instead of a cell.
+// Cells per row in the tray, computed when it is built (see openSymbolPicker),
+// so up/down step a row instead of a cell.
 static int s_emojiPickerCols = 1;
 // Hold-to-repeat: the direction the held key is stepping, and when it last
 // stepped. Driven from the loop because a held key produces no further key
 // events to hang this off; see serviceEmojiPickerRepeat.
 static int      s_emojiPickerRepeatDelta = 0;
 static uint32_t s_emojiPickerRepeatLastMs = 0;
-// Packet id the pick reacts to. Non-zero when the tray was opened in send mode
-// with the chat cursor sitting on a message: the pick then goes out as a tapback
-// (reply_id + emoji flag) on that message instead of a standalone message.
-static uint32_t s_emojiPickerTapbackId = 0;
 static lv_obj_t *s_composeCharCount = nullptr;
 // Pinyin IME bar: one row between the input and the legend -- a 中/EN toggle
 // button plus the composition + candidate cells. The row lives and dies with
@@ -941,16 +934,26 @@ static bool s_nodesActionLocateEnabled = false;
 // same set, in the same order, as CHAT_TAPS in web_config.cpp — a reaction
 // should be the same thing whether it was sent from the device or the browser.
 // Keep the two lists in step.
+//
+// kTapbackTray is the *wire* form: the exact codepoints other clients match
+// against. The device no longer carries an emoji face, so these render as tofu
+// if drawn raw — kTapbackLabel is what the UI shows instead, one ASCII stand-in
+// per entry. Keep the two lists in step too.
 static const char *const kTapbackTray[] = {
     "\U0001F44D", "\U0001F44E", "\U0000203C", "\U00002753", "\U0001F602", "\U0001F622",
 };
 static constexpr int kTapbackTrayCount = (int)(sizeof(kTapbackTray) / sizeof(kTapbackTray[0]));
+static const char *const kTapbackLabel[] = {
+    "[+]", "[-]", "[!!]", "[?]", "[lol]", ":(",
+};
+static_assert(sizeof(kTapbackLabel) / sizeof(kTapbackLabel[0]) == kTapbackTrayCount,
+              "tapback label tray must mirror the wire tray");
 
 // ── Message Actions ──────────────────────────────────────────────────────────
-// Off on the Cardputer. The modal would add seven emoji cells to a board with
-// no PSRAM and a 96 KB LVGL pool — the same headroom that caps its emoji tray at
-// 40 glyphs and compiles Discovery out entirely. Chat there keeps the plain node
-// menu; the quick-emoji tray on E is still the way to send a reaction.
+// Off on the Cardputer. The modal would add seven message-action rows to a
+// board with no PSRAM and a 96 KB LVGL pool — the same headroom that led to
+// compiling Discovery out entirely. Chat there keeps the plain node menu; a
+// reaction there goes through the plain node menu instead.
 #if defined(DEVICE_CARDPUTER_LORA_HAT)
 #define HAS_MESSAGE_ACTIONS 0
 #else
@@ -959,16 +962,15 @@ static constexpr int kTapbackTrayCount = (int)(sizeof(kTapbackTray) / sizeof(kTa
 
 // The same modal opened from a chat message rather than a node row. It keeps
 // the six node actions and prepends the things that only make sense about a
-// message: the tapback reactions, an escape to the full emoji tray, and Reply.
+// message: the tapback reactions and Reply.
 //
 // One flat index space so up/down and the selection highlight need no special
 // cases — the tapbacks are rows like any other, they just render as a strip of
-// glyph cells above the two-column grid instead of inside it.
+// label cells above the two-column grid instead of inside it.
 //
-//   0 .. 5  tapback reactions (kTapbackTray)
-//   6       "..."  -> full emoji picker in tapback mode
-//   7       Reply
-//   8 ..12  node actions, via kMsgActionNodeMap
+//   0 .. 5  tapback reactions (kTapbackTray / kTapbackLabel)
+//   6       Reply
+//   7 ..11  node actions, via kMsgActionNodeMap
 //
 // Favorite is deliberately absent from message mode. It is a property of the
 // node rather than anything to do with the message, it is the one action here
@@ -981,13 +983,11 @@ static constexpr int kTapbackTrayCount = (int)(sizeof(kTapbackTray) / sizeof(kTa
 static constexpr uint8_t kMsgActionNodeMap[] = { 0, 1, 3, 4, 5 };
 static constexpr int kMsgActionNodeCount =
     (int)(sizeof(kMsgActionNodeMap) / sizeof(kMsgActionNodeMap[0]));
-static constexpr int kMsgActionMoreIdx  = kTapbackTrayCount;        // 6
-static constexpr int kMsgActionReplyIdx = kMsgActionMoreIdx + 1;    // 7
-static constexpr int kMsgActionNodeBase = kMsgActionReplyIdx + 1;   // 8
-static constexpr int kMsgActionCount    = kMsgActionNodeBase + kMsgActionNodeCount;  // 13
+static constexpr int kMsgActionReplyIdx = kTapbackTrayCount;        // 6
+static constexpr int kMsgActionNodeBase = kMsgActionReplyIdx + 1;   // 7
+static constexpr int kMsgActionCount    = kMsgActionNodeBase + kMsgActionNodeCount;  // 12
 static constexpr char kMsgActionShortcuts[kMsgActionCount] = {
     '1', '2', '3', '4', '5', '6',   // tapbacks
-    'M',                            // more emoji
     'R',                            // reply
     'T', 'D', 'I', 'P', 'G'         // node actions, minus (F)avorite
 };
@@ -1429,13 +1429,13 @@ static const lv_font_t *scaledChatFontBase(const lv_font_t *base) {
 #endif
 }
 
-// Chat/DM text face, emoji-enabled. Every chat, DM, name, and preview label
-// funnels its font through here, so attaching the emoji fallback at this one
-// point is what makes received emoji render everywhere — including inside
+// Chat/DM text face, CJK-enabled. Every chat, DM, name, and preview label
+// funnels its font through here, so attaching the CJK fallback at this one
+// point is what makes received Chinese render everywhere — including inside
 // chatFitBubbleLabel(), which measures with this same face so bubble widths
-// account for emoji glyphs too.
+// account for CJK glyphs too.
 static const lv_font_t *scaledChatFont(const lv_font_t *base) {
-    return emojiFont(scaledChatFontBase(base));
+    return textFallbackFont(scaledChatFontBase(base));
 }
 
 static const char *fontSizeName(uint8_t size) {
@@ -1596,7 +1596,7 @@ static void onComposeCancelPressed(lv_event_t *e);
 static void onComposeInputChanged(lv_event_t *e);
 static void updateComposeCharCount();
 static void refreshChatComposeButtonState();
-static void openEmojiPicker(bool sendMode = false, bool symbolTray = false);
+static void openSymbolPicker();
 static void closeEmojiPicker();
 static void onChatMessagePressed(lv_event_t *e);
 static void recomputeChannelHashes();
@@ -2194,31 +2194,34 @@ static size_t decodeUtf8Codepoint(const char *src, size_t avail, uint32_t &cp) {
     return 0;
 }
 
-static bool isEmojiCodepoint(uint32_t cp) {
-    if (cp >= 0x1F300 && cp <= 0x1FAFF) return true;
-    if (cp >= 0x2600 && cp <= 0x27BF) return true;
-    if (cp >= 0x1F1E6 && cp <= 0x1F1FF) return true; // flag letters
-    return false;
-}
-
 static bool isEmojiJoinerOrModifier(uint32_t cp) {
     if (cp == 0x200D || cp == 0xFE0F || cp == 0x20E3) return true; // ZWJ, VS16, keycap
     if (cp >= 0x1F3FB && cp <= 0x1F3FF) return true; // skin tones
     return false;
 }
 
+// ASCII stand-ins for emoji the device can no longer draw (the emoji face was
+// removed; its flash went to the full CJK face). Covers the tapback set first —
+// a received reaction must read as something — plus the handful of everyday
+// smileys people still type. Anything outside the table draws as tofu.
 static const char *emojiAliasForCodepoint(uint32_t cp) {
     switch (cp) {
-        case 0x1F600: case 0x1F601: case 0x1F602: case 0x1F603:
+        case 0x1F600: case 0x1F601: case 0x1F603:
         case 0x1F604: case 0x1F606: case 0x1F60A: case 0x1F642:
         case 0x263A:
             return ":)";
+        case 0x1F602:
+            return "[lol]";
         case 0x1F614: case 0x1F622: case 0x1F62D:
             return ":(";
         case 0x1F44D:
             return "[+]";
         case 0x1F44E:
             return "[-]";
+        case 0x203C:
+            return "[!!]";
+        case 0x2753:
+            return "[?]";
         case 0x2764:
             return "<3";
         case 0x1F525:
@@ -2257,7 +2260,7 @@ static size_t appendTextLiteral(char *dst, size_t dstLen, size_t writePos, const
 
 // Codepoints that carry ordinary punctuation meaning but sit outside what the
 // built-in Montserrat faces can draw (ASCII 0x20-0x7F, plus degree and bullet).
-// The emoji fallback face is no help — it holds emoji, not Latin punctuation —
+// The CJK fallback face is no help — it holds hanzi, not Latin punctuation —
 // so anything left in this range reaches LVGL's missing-glyph box. Phone
 // keyboards and desktop autocorrect emit these constantly: an iOS "..." becomes
 // a single U+2026, and quotes are curled on the way out.
@@ -2344,21 +2347,18 @@ static void renderEmojiSafeText(const char *src, char *dst, size_t dstLen) {
             }
         }
 
-#if !LV_USE_TINY_TTF
-        // No emoji font compiled in: fall back to ASCII stand-ins for the
-        // handful we have aliases for. With the emoji font present (the default)
-        // this is skipped and the codepoint passes through to be drawn.
+        // No emoji face compiled in any more: emoji always falls back to the
+        // ASCII stand-ins above, so a received reaction reads as text.
         const char *alias = emojiAliasForCodepoint(cp);
         if (alias) {
             writePos = appendTextLiteral(dst, dstLen, writePos, alias);
             i += n;
             continue;
         }
-#endif
 
         // Pass the codepoint through untouched. The chat/DM/name/preview labels
-        // draw with an emoji-enabled face (see emojiFont / scaledChatFont), so
-        // any emoji in the font renders inline; the rest show LVGL's fallback
+        // draw with the CJK-fallback face (see scaledChatFont), so Chinese
+        // renders inline; everything else the faces lack shows LVGL's fallback
         // box, same as before.
         if (writePos + n >= dstLen) break;
         memcpy(dst + writePos, src + i, n);
@@ -2736,6 +2736,9 @@ static void pagerAudioProbeOnce() {
                   (unsigned)(reg32 < 0 ? 0 : reg32),
                   (reg31 < 0) ? -1 : (int)((reg31 & 0x20) >> 5));
 
+#if defined(DEVICE_TLORA_PAGER_TFT)
+    // The expander amp-rail dump is pager-only: square drives its PA through
+    // square_io and has no XL9555 in the picture.
     uint8_t out0, out1, cfg0, cfg1;
     if (sPagerExpAddr >= 0
         && xl9555ReadAll((uint8_t)sPagerExpAddr, out0, out1, cfg0, cfg1)) {
@@ -2744,6 +2747,7 @@ static void pagerAudioProbeOnce() {
     } else {
         Serial.println("[audio] amp rail: expander unreadable");
     }
+#endif
 }
 
 static bool pagerAudioSelectCommFormat(i2s_config_t &cfg) {
@@ -7471,7 +7475,7 @@ static void closeComposePrompt() {
 // ── Pinyin IME bar ────────────────────────────────────────────────────────────
 // One row under the compose input: a 中/EN toggle button and, in CN mode, the
 // live composition plus the current page of candidates ("ni: 1.你 2.呢 ...").
-// All rendering goes through the emoji face, whose CJK fallback covers every
+// All rendering goes through the CJK-fallback face, which covers every
 // candidate the generator can emit (tools/gen_pinyin_ime.py filters to the
 // font's codepoints), so no candidate ever rasterizes as a missing glyph.
 
@@ -7547,7 +7551,7 @@ static void composeCreateImeBar(lv_obj_t *parent) {
     lv_obj_set_style_pad_all(btn, 0, 0);
     lv_obj_add_event_cb(btn, composeImeTogglePressed, LV_EVENT_CLICKED, nullptr);
     s_composeImeToggleLbl = lv_label_create(btn);
-    lv_obj_set_style_text_font(s_composeImeToggleLbl, emojiFont(&lv_font_montserrat_12), 0);
+    lv_obj_set_style_text_font(s_composeImeToggleLbl, textFallbackFont(&lv_font_montserrat_12), 0);
     lv_obj_center(s_composeImeToggleLbl);
 
     s_composeImeCands = lv_label_create(s_composeImeBar);
@@ -7559,7 +7563,7 @@ static void composeCreateImeBar(lv_obj_t *parent) {
     // one line, "..." when the tail does not fit.
     lv_obj_set_height(s_composeImeCands, lv_pct(100));
     lv_label_set_long_mode(s_composeImeCands, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_font(s_composeImeCands, emojiFont(&lv_font_montserrat_12), 0);
+    lv_obj_set_style_text_font(s_composeImeCands, textFallbackFont(&lv_font_montserrat_12), 0);
     lv_obj_set_style_text_color(s_composeImeCands, lv_color_hex(0xFFD966), 0);
 
     composeImeRefreshBar();
@@ -7663,61 +7667,13 @@ static bool composeImeHandleKey(char k) {
     return false;
 }
 
-// ── On-device emoji picker ────────────────────────────────────────────────────
-// A grid of common emoji, opened from the compose modal, that inserts the picked
-// glyph's UTF-8 into the message textarea. These keyboards have no emoji key, so
-// this is the only way to compose emoji on-device; received ones already render
-// via the emoji fallback font. The set is intentionally a small curated tray of
-// the everyday ones, not the whole 1,489-glyph font — a full grid would be
-// unusable to scroll on these panels.
+// ── On-device symbol picker ──────────────────────────────────────────────────
+// A grid of punctuation opened from the compose modal, that inserts the picked
+// character into the message textarea. Shared grid code with the former emoji
+// picker; the emoji face was removed (its 2.4 MB of flash went to the full CJK
+// fallback face) so only this symbol tray remains.
 // The tapback reactions live up with the Message Actions constants, which
 // derive their index layout from the size of that list.
-
-static const char *const kEmojiTray[] = {
-    // Faces
-    "\U0001F600", "\U0001F602", "\U0001F603", "\U0001F604", "\U0001F609",
-    "\U0001F60A", "\U0001F60D", "\U0001F618", "\U0001F60E", "\U0001F914",
-    "\U0001F610", "\U0001F644", "\U0001F60F", "\U0001F622", "\U0001F62D",
-    "\U0001F621", "\U0001F631", "\U0001F633", "\U0001F634", "\U0001F925",
-    "\U0001F92F", "\U0001F642", "\U0001F643", "\U0001F615", "\U0001F62C",
-    // Hands & people
-    "\U0001F44D", "\U0001F44E", "\U0001F44C", "\U0001F44B", "\U0001F44F",
-    "\U0001F64F", "\U0001F4AA", "\U0001F91D", "\U0000270C", "\U0001F44A",
-    "\U0001F595",
-    // Symbols
-    "\U00002764", "\U0001F494", "\U0001F525", "\U00002B50", "\U00002705",
-    "\U0000274C", "\U00002757", "\U00002753", "\U0001F4A1", "\U0001F4AF",
-    "\U0001F440", "\U0001F4CD",
-    // Celebrate & objects
-    "\U0001F389", "\U0001F38A", "\U0001F381", "\U0001F680",
-    // Weather & nature
-    "\U00002600", "\U00002601", "\U0001F327", "\U000026A1", "\U00002744",
-    "\U0001F30A",
-    // Food & drink
-    "\U0001F355", "\U00002615", "\U0001F37A", "\U0001F36A", "\U0001F34E",
-};
-constexpr int kEmojiTrayTotal = (int)(sizeof(kEmojiTray) / sizeof(kEmojiTray[0]));
-
-// How many of the tray actually get built. Every cell is two live LVGL objects
-// (cell + label) held for as long as the picker is open, on top of a DM view
-// that can already be 60 message rows — and the picker's glyphs then rasterize
-// out of whatever pool is left.
-//
-// The PSRAM boards run a 384 KB pool (see lv_conf.h) and can afford the whole
-// tray. The Cardputer cannot: no PSRAM means its pool is a 96 KB internal-DRAM
-// array, so it takes a shorter tray, the same way it already takes MAX_DM_LINES
-// 16 against everyone else's 60.
-//
-// Truncation is from the end, and kEmojiTray is ordered by category, so the cut
-// keeps every face and hand plus the common reaction symbols and drops the
-// tail: celebrate, weather, food.
-#if defined(DEVICE_CARDPUTER_LORA_HAT)
-constexpr int kEmojiTrayCount = 40;
-#else
-constexpr int kEmojiTrayCount = kEmojiTrayTotal;
-#endif
-static_assert(kEmojiTrayCount <= kEmojiTrayTotal,
-              "emoji tray cap must not exceed the number of emoji defined");
 
 // Symbols the Mesh Deck's physical keyboard cannot reach. Its 48 keys cover
 // letters, digits, comma and period and nothing else, so without these the only
@@ -7726,6 +7682,11 @@ static_assert(kEmojiTrayCount <= kEmojiTrayTotal,
 //
 // '#' is included even though it has its own key: that key is the symbol
 // button, so it opens this tray rather than typing the character.
+//
+// This used to share the picker with a monochrome emoji tray; the emoji face
+// was removed (its 2.4 MB of flash went to the full CJK fallback face), so the
+// picker now only ever shows this symbol set. Tapback reactions — the other
+// emoji sender — live in kTapbackTray up with the Message Actions constants.
 static const char *const kSymbolTray[] = {
     "!", "?", ".", ",", ":", ";", "'", "\"",
     "-", "_", "/", "@", "#", "&", "+", "=",
@@ -7734,17 +7695,12 @@ static const char *const kSymbolTray[] = {
 };
 constexpr int kSymbolTrayCount = (int)(sizeof(kSymbolTray) / sizeof(kSymbolTray[0]));
 
-// The picker renders whichever tray is active. Everything below — grid build,
-// selection, scrolling, insert — is shared; only the source array differs.
-static const char *const *s_pickerTray  = kEmojiTray;
-static int                s_pickerCount = kEmojiTrayCount;
-
 static void refreshEmojiPickerSelection() {
     if (!s_emojiPickerModal) return;
     lv_obj_t *grid = lv_obj_get_child(s_emojiPickerModal, 1);   // [0]=hint, [1]=grid
     if (!grid) return;
     const bool light = (s_cfg.uiMode == UI_MODE_LIGHT);
-    for (int i = 0; i < s_pickerCount; i++) {
+    for (int i = 0; i < kSymbolTrayCount; i++) {
         lv_obj_t *cell = lv_obj_get_child(grid, i);
         if (!cell) continue;
         const bool sel = (i == s_emojiPickerSelection);
@@ -7758,13 +7714,14 @@ static void refreshEmojiPickerSelection() {
     }
 }
 
-// Fire the picked glyph as a standalone one-emoji message to whatever screen the
-// picker was opened over: the selected DM conversation when the DM screen is up,
-// otherwise the active channel. There is no compose step — the picker is a
-// quick-reaction affordance opened with 'e' from the chat/DM browse screen.
-// tapbackId, when non-zero, turns the channel send into a reaction on that
-// message (Data.reply_id + Data.emoji) — same wire shape as the web UI's tapback
-// buttons — so other clients render it on the bubble instead of as a new line.
+// Fire a reaction glyph to whatever screen the Message Actions modal was opened
+// over: the selected DM conversation when the DM screen is up, otherwise the
+// active channel. There is no compose step. tapbackId, when non-zero, turns the
+// channel send into a reaction on that message (Data.reply_id + Data.emoji) —
+// same wire shape as the web UI's tapback buttons — so other clients render it
+// on the bubble instead of as a new line. The device no longer carries an emoji
+// face, so the glyph shows as the missing-glyph box here, but it renders
+// normally on web clients and other devices that still ship one.
 static void sendQuickEmoji(const char *emoji, uint32_t tapbackId = 0) {
     if (!emoji || !emoji[0]) return;
     if (s_myNodeId == 0) deriveNodeId();
@@ -7772,8 +7729,9 @@ static void sendQuickEmoji(const char *emoji, uint32_t tapbackId = 0) {
 
     if (s_dmModal) {
         // On the DM screen, only ever send to the selected conversation — never
-        // fall back to the channel. 'e' is gated on a live selection, so this is
-        // just belt-and-suspenders against the conversation being deselected.
+        // fall back to the channel. The entry point is gated on a live
+        // selection, so this is just belt-and-suspenders against the
+        // conversation being deselected.
         DmConv *dm = selectedDmConversation();
         if (!dm || dm->nodeId == 0) return;
         if (!DMs.sendDm(s_myNodeId, dm->nodeId, emoji)) {
@@ -7797,7 +7755,7 @@ static void emojiPickerStep(int delta) {
     if (delta == 0) return;
     int nxt = s_emojiPickerSelection + delta;
     if (nxt < 0) nxt = 0;
-    if (nxt >= s_pickerCount) nxt = s_pickerCount - 1;
+    if (nxt >= kSymbolTrayCount) nxt = kSymbolTrayCount - 1;
     if (nxt == s_emojiPickerSelection) return;
     s_emojiPickerSelection = nxt;
     refreshEmojiPickerSelection();
@@ -7825,39 +7783,25 @@ static void serviceEmojiPickerRepeat(uint32_t nowMs) {
 }
 
 static void emojiPickerActivate(int idx) {
-    if (idx < 0 || idx >= s_pickerCount) return;
-    if (s_emojiPickerSendMode) {
-        const uint32_t tapbackId = s_emojiPickerTapbackId;   // survives the teardown
-        closeEmojiPicker();   // one-shot: tear the tray down before the send refresh
-        sendQuickEmoji(s_pickerTray[idx], tapbackId);
-        return;
-    }
-    // Insert mode: append to the open compose box.
+    if (idx < 0 || idx >= kSymbolTrayCount) return;
+    // Append to the open compose box.
     if (s_composeInput) {
-        lv_textarea_add_text(s_composeInput, s_pickerTray[idx]);
+        lv_textarea_add_text(s_composeInput, kSymbolTray[idx]);
         updateComposeCharCount();
     }
 
-    // The symbol tray is one-shot: pick a symbol and you are back in the message
-    // you were typing. Emoji keep the tray up, because picking several in a row
-    // is the common case there — a symbol is usually a single character in the
-    // middle of a sentence, so staying open just means an extra keypress to
-    // dismiss before typing can continue.
-    //
-    // Compared by tray pointer rather than a separate flag so this cannot fall
-    // out of step with whatever openEmojiPicker() selected.
-    if (s_pickerTray == kSymbolTray) {
-        closeEmojiPicker();
-    }
+    // The tray is one-shot: pick a symbol and you are back in the message you
+    // were typing — a symbol is usually a single character in the middle of a
+    // sentence, so staying open just means an extra keypress to dismiss before
+    // typing can continue.
+    closeEmojiPicker();
 }
 
 static void onEmojiCellPressed(lv_event_t *e) {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    if (!s_emojiPickerSendMode) {
-        s_emojiPickerSelection = idx;
-        refreshEmojiPickerSelection();
-    }
-    emojiPickerActivate(idx);   // sends, or inserts; closes except for the emoji tray
+    s_emojiPickerSelection = idx;
+    refreshEmojiPickerSelection();
+    emojiPickerActivate(idx);
 }
 
 static void onEmojiBackdropPressed(lv_event_t *e) {
@@ -7873,7 +7817,6 @@ static void closeEmojiPicker() {
     }
     s_emojiPickerBackdrop = nullptr;
     s_emojiPickerModal = nullptr;
-    s_emojiPickerTapbackId = 0;
     s_emojiPickerRepeatDelta = 0;
 }
 
@@ -7894,30 +7837,15 @@ static void onEmojiGridScrolled(lv_event_t *e) {
     logLvglMemDiag("emoji scroll");
 }
 
-static void openEmojiPicker(bool sendMode, bool symbolTray) {
+static void openSymbolPicker() {
     if (!s_rootScreen || s_emojiPickerModal) return;
-    // Pick the tray before anything reads it: the grid, the selection clamp and
-    // the insert path all go through s_pickerTray.
-    s_pickerTray  = symbolTray ? kSymbolTray : kEmojiTray;
-    s_pickerCount = symbolTray ? kSymbolTrayCount : kEmojiTrayCount;
-    // Symbols are text, never a reaction, so they only ever insert.
-    if (symbolTray) sendMode = false;
-    s_emojiPickerSendMode = sendMode;
     s_emojiPickerSelection = 0;
-    // Cursor parked on a chat message → this pick reacts to it. The DM screen has
-    // no per-message cursor, so a stale chat selection must never target there.
-    s_emojiPickerTapbackId = (sendMode && !s_dmModal) ? s_selectedMsgReplyPacketId : 0;
-    const bool tapback = (s_emojiPickerTapbackId != 0);
 
     const int w = lv_disp_get_hor_res(NULL);
     const int h = lv_disp_get_ver_res(NULL);
     int modalW = w - 12;
     if (modalW > 340) modalW = 340;
 
-    // Emoji glyphs come from the fallback face; a blank base label just carries
-    // the fallback, so any Montserrat size works — pick one that reads well.
-    const lv_font_t *cellFont = symbolTray ? &lv_font_montserrat_18
-                                          : emojiFont(&lv_font_montserrat_18);
     // Cell size follows the panel: big enough to tap on touch builds, small
     // enough that a couple of rows fit the Cardputer's 135px-tall screen.
     const int cell = (w <= 160) ? 24 : 30;
@@ -7959,18 +7887,12 @@ static void openEmojiPicker(bool sendMode, bool symbolTray) {
     // No "tap outside to close" any more: the corner X says it, and it says it
     // where the finger can reach. The tray covers all but a 6px margin of the
     // screen, so the backdrop it was pointing at was barely a target at all.
-    lv_label_set_text(hint, symbolTray ? "Tap a symbol"
-                            : tapback  ? "Tap to react"
-                            : sendMode ? "Tap to send"
-                                       : "Tap to add");
+    lv_label_set_text(hint, "Tap a symbol");
     // This modal has no title: the hint is its top row, so it is the one that
     // has to make room for the X above the tray.
     reserveHeltecCloseXRow(hint);
 #else
-    lv_label_set_text_fmt(hint, symbolTray ? "Move • Enter=Insert • %s=Close"
-                                : tapback  ? "Move • Enter=React • %s=Close"
-                                : sendMode ? "Move • Enter=Send • %s=Close"
-                                           : "Move • Enter=Add • %s=Close",
+    lv_label_set_text_fmt(hint, "Move • Enter=Insert • %s=Close",
                           modalCloseKeyLabel());
 #endif
 
@@ -8001,14 +7923,14 @@ static void openEmojiPicker(bool sendMode, bool symbolTray) {
     s_emojiPickerCols = (modalW - 12 + 2) / (cell + 2);
     if (s_emojiPickerCols < 1) s_emojiPickerCols = 1;
 
-    for (int i = 0; i < s_pickerCount; i++) {
+    for (int i = 0; i < kSymbolTrayCount; i++) {
         lv_obj_t *c = lv_obj_create(grid);
         // The whole tray is built up front, so this is the largest single burst
         // of allocations in the UI — and it lands on top of the chat/DM screen
         // that is still live underneath. Bail out cleanly instead of leaving a
         // half-built grid behind when the pool cannot take all of it.
         if (!c) {
-            logLvglMemDiag("emoji picker aborted (low LVGL mem)");
+            logLvglMemDiag("symbol picker aborted (low LVGL mem)");
             closeEmojiPicker();
             return;
         }
@@ -8020,12 +7942,12 @@ static void openEmojiPicker(bool sendMode, bool symbolTray) {
         lv_obj_add_event_cb(c, onEmojiCellPressed, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         lv_obj_t *g = lv_label_create(c);
         if (!g) {
-            logLvglMemDiag("emoji picker aborted (low LVGL mem)");
+            logLvglMemDiag("symbol picker aborted (low LVGL mem)");
             closeEmojiPicker();
             return;
         }
-        lv_obj_set_style_text_font(g, cellFont, 0);
-        // The emoji font is monochrome — glyphs take the label's text color —
+        lv_obj_set_style_text_font(g, &lv_font_montserrat_18, 0);
+        // Symbols are text — glyphs take the label's text color —
         // so without setting it they inherit whatever the default is and read as
         // dark shapes on the dark tray background.
         lv_obj_set_style_text_color(g,
@@ -8033,7 +7955,7 @@ static void openEmojiPicker(bool sendMode, bool symbolTray) {
                                         ? lv_color_hex(0x16233A)
                                         : lv_color_hex(0xFFFFFF),
                                     0);
-        setLabelTextEmojiSafe(g, s_pickerTray[i]);
+        setLabelTextEmojiSafe(g, kSymbolTray[i]);
         lv_obj_center(g);
     }
 
@@ -8046,7 +7968,7 @@ static void openEmojiPicker(bool sendMode, bool symbolTray) {
     // picker rather than leaving one with no way out.
     if (!appendHeltecCloseX(s_emojiPickerModal,
                             [](lv_event_t *ev) { LV_UNUSED(ev); closeEmojiPicker(); })) {
-        logLvglMemDiag("emoji picker aborted (low LVGL mem)");
+        logLvglMemDiag("symbol picker aborted (low LVGL mem)");
         closeEmojiPicker();
         return;
     }
@@ -8054,7 +7976,7 @@ static void openEmojiPicker(bool sendMode, bool symbolTray) {
 
     // Baseline right after the tray is built but before a single glyph has been
     // rasterized: whatever the scroll samples show, they are relative to this.
-    logLvglMemDiag("emoji picker built");
+    logLvglMemDiag("symbol picker built");
     lv_obj_add_event_cb(grid, onEmojiGridScrolled, LV_EVENT_SCROLL, nullptr);
 
     refreshEmojiPickerSelection();
@@ -8139,19 +8061,19 @@ static void openComposePrompt(uint32_t replyPacketId,
     }
 
 #if defined(DEVICE_TLORA_PAGER_TFT)
-    const lv_font_t *composeBodyFont = emojiFont(&lv_font_montserrat_14);
+    const lv_font_t *composeBodyFont = textFallbackFont(&lv_font_montserrat_14);
     const lv_coord_t composeInputH = (lv_coord_t)((lv_font_get_line_height(composeBodyFont) * 3) + 6);
     const lv_coord_t composeInputPadTop = 1;
     const lv_coord_t composeModalBottomPad = 2;
     const lv_coord_t composeModalRowPad = 1;
 #elif defined(DEVICE_TDECK) || defined(DEVICE_M9)
-    const lv_font_t *composeBodyFont = emojiFont(&lv_font_montserrat_12);
+    const lv_font_t *composeBodyFont = textFallbackFont(&lv_font_montserrat_12);
     const lv_coord_t composeInputH = (lv_coord_t)((lv_font_get_line_height(composeBodyFont) * 3) + 6);
     const lv_coord_t composeInputPadTop = 1;
     const lv_coord_t composeModalBottomPad = 2;
     const lv_coord_t composeModalRowPad = 1;
 #elif defined(DEVICE_MESH_DECK)
-    const lv_font_t *composeBodyFont = emojiFont(&lv_font_montserrat_12);
+    const lv_font_t *composeBodyFont = textFallbackFont(&lv_font_montserrat_12);
     // Six lines. The panel is 320x240 and compose is a modal activity, so there
     // is no reason to leave most of it empty — a 200-character message is about
     // six lines at this width, meaning the whole thing is visible while typing.
@@ -8162,7 +8084,7 @@ static void openComposePrompt(uint32_t replyPacketId,
     const lv_coord_t composeModalBottomPad = 4;
     const lv_coord_t composeModalRowPad = 2;
 #elif defined(DEVICE_CARDPUTER_LORA_HAT)
-    const lv_font_t *composeBodyFont = emojiFont(&lv_font_montserrat_12);
+    const lv_font_t *composeBodyFont = textFallbackFont(&lv_font_montserrat_12);
     // Compose is full screen here, so the input gets four lines instead of the
     // single one the old boxed modal had room for. 200 characters never fit on
     // one 240 px line, and the text scrolled sideways out of view as you typed.
@@ -8177,7 +8099,7 @@ static void openComposePrompt(uint32_t replyPacketId,
     const lv_coord_t composeModalBottomPad = 4;
     const lv_coord_t composeModalRowPad = 1;
 #else
-    const lv_font_t *composeBodyFont = emojiFont(&lv_font_montserrat_12);
+    const lv_font_t *composeBodyFont = textFallbackFont(&lv_font_montserrat_12);
     const lv_coord_t composeInputH = (lv_coord_t)(lv_font_get_line_height(composeBodyFont) + 8);
     const lv_coord_t composeInputPadTop = 1;
     const lv_coord_t composeModalBottomPad = 4;
@@ -8234,7 +8156,7 @@ static void openComposePrompt(uint32_t replyPacketId,
         lv_obj_t *replyLbl = lv_label_create(s_composeModal);
         lv_obj_set_width(replyLbl, lv_pct(100));
         lv_obj_set_height(replyLbl, lv_font_get_line_height(&lv_font_montserrat_10));
-        lv_obj_set_style_text_font(replyLbl, emojiFont(&lv_font_montserrat_10), 0);
+        lv_obj_set_style_text_font(replyLbl, textFallbackFont(&lv_font_montserrat_10), 0);
         lv_obj_set_style_text_color(replyLbl, lv_color_hex(0xA7C7FF), 0);
         lv_label_set_long_mode(replyLbl, LV_LABEL_LONG_DOT);
         setLabelTextEmojiSafe(replyLbl, preview[0] ? preview : "(message)");
@@ -8248,7 +8170,7 @@ static void openComposePrompt(uint32_t replyPacketId,
     }
     lv_obj_set_width(s_composeInput, lv_pct(100));
     lv_obj_set_height(s_composeInput, 44);
-    lv_obj_set_style_text_font(s_composeInput, emojiFont(&lv_font_montserrat_14), 0);
+    lv_obj_set_style_text_font(s_composeInput, textFallbackFont(&lv_font_montserrat_14), 0);
     lv_obj_set_style_text_color(s_composeInput, lv_color_hex(0xE8F1FF), 0);
     lv_obj_set_style_bg_color(s_composeInput, lv_color_hex(0x102B61), 0);
     lv_obj_set_style_bg_opa(s_composeInput, LV_OPA_COVER, 0);
@@ -8277,17 +8199,19 @@ static void openComposePrompt(uint32_t replyPacketId,
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    // Emoji tray opener. Touch-only builds have no keyboard key to bind, so the
-    // button is the only way in here; it's narrow (fixed width, no flex-grow) so
-    // Cancel/Send keep the room.
-    lv_obj_t *emojiBtn = lv_btn_create(row);
-    lv_obj_set_size(emojiBtn, 34, lv_pct(100));
-    lv_obj_add_event_cb(emojiBtn, [](lv_event_t *) { openEmojiPicker(false); },
+    // Symbol tray opener. Touch-only builds have no keyboard key to bind, so
+    // the button is the only way in here; it's narrow (fixed width, no
+    // flex-grow) so Cancel/Send keep the room. Labelled "#" after the Mesh
+    // Deck key that opens the same tray — the emoji face it used to open is
+    // gone, its flash having gone to the full CJK face.
+    lv_obj_t *symbolBtn = lv_btn_create(row);
+    lv_obj_set_size(symbolBtn, 34, lv_pct(100));
+    lv_obj_add_event_cb(symbolBtn, [](lv_event_t *) { openSymbolPicker(); },
                         LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *emojiLbl = lv_label_create(emojiBtn);
-    lv_obj_set_style_text_font(emojiLbl, emojiFont(&lv_font_montserrat_16), 0);
-    setLabelTextEmojiSafe(emojiLbl, "\U0001F600");
-    lv_obj_center(emojiLbl);
+    lv_obj_t *symbolLbl = lv_label_create(symbolBtn);
+    lv_obj_set_style_text_font(symbolLbl, &lv_font_montserrat_16, 0);
+    lv_label_set_text(symbolLbl, "#");
+    lv_obj_center(symbolLbl);
 
     lv_obj_t *cancelBtn = lv_btn_create(row);
     lv_obj_set_flex_grow(cancelBtn, 1);
@@ -8494,8 +8418,9 @@ static void openComposePrompt(uint32_t replyPacketId,
     lv_obj_set_style_pad_bottom(hint, 1, 0);
 #endif
 #if defined(DEVICE_CARDPUTER_LORA_HAT)
-    // Emoji isn't a compose action anymore — it's the 'E' quick-send tray on the
-    // chat/DM screen (see openEmojiPicker), so it's off the compose legend.
+    // Emoji left the compose box with its font: the "#" button here is the
+    // symbol tray now, and reactions live in Message Actions (not on this
+    // board), so the hint is plain send/cancel.
     lv_label_set_text(hint, "Enter=Send  Esc=Cancel  Bksp=Del");
 #else
     lv_label_set_text(hint, "Enter=Send  Bksp(empty)=Cancel");
@@ -15307,9 +15232,6 @@ static void populateHeltecBottomNav(lv_obj_t *bar, int activeTarget) {
     struct NavItem {
         const char *icon;
         int target;
-        // The one glyph that is not from the built-in symbol set, and so has to
-        // be drawn with the emoji face instead of the plain one.
-        bool emoji;
         // The key that does the same thing from the chat screen, drawn beside
         // the icon on keyboard boards and ignored on touch-only ones. nullptr
         // where there is no key: Home is Backspace, which is not a letter to
@@ -15318,26 +15240,20 @@ static void populateHeltecBottomNav(lv_obj_t *bar, int activeTarget) {
         const char *key;
     };
 
-    // Nodes is a list of people, so it gets a person. LVGL's symbol set has no
-    // contact glyph — it is FontAwesome's icon subset, and no bust/user icon is
-    // in the montserrat cmap — so this one comes from the emoji fallback face
-    // that already renders emoji in chat.
+    // Nodes is a list of people, so it deserves a person — but LVGL's symbol
+    // set has no contact glyph (it is FontAwesome's icon subset, and no
+    // bust/user icon is in the montserrat cmap), and the emoji face that used
+    // to supply U+1F464 is gone, its flash having gone to the full CJK face.
+    // LV_SYMBOL_LIST stands in: it reads as "roster", which is what the screen
+    // is.
     //
-    // With a fallback: emojiFont() hands back the base face unchanged when the
-    // emoji font failed to initialize (a full LVGL pool at boot), and drawing
-    // U+1F464 with the base face would put a tofu box in the nav bar. A list
-    // icon is a worse Nodes icon than a person, and a much better one than a
-    // rectangle.
     // 14 on every board, keyboard ones included. The glyph and its shortcut
     // letter do fit side by side at this size: the widest pair is the node
-    // roster's — a 16 px emoji beside "(N)" at 14.9 px — which comes to 32 px
+    // roster's — a 16 px symbol beside "(N)" at 14.9 px — which comes to 32 px
     // against the ~35 px a button has to give on a 320 px bar. (The letters are
     // narrower than they look: "(C)" is 14 px at montserrat_10, not the ~17 px
     // a glance at the parens suggests.)
     const lv_font_t *const navIconFont = &lv_font_montserrat_14;
-    const lv_font_t *const navEmojiFont = emojiFont(navIconFont);
-    const bool navEmojiReady = (navEmojiFont != navIconFont);
-    const char *const kContactIcon = "\U0001F464";  // bust in silhouette
     // Icons rather than words. Six buttons of text across 240 px meant either
     // an abbreviation per board ("Config" on the wide one, "Cfg" on the tall
     // one) or a 10 px label with nothing left over; a glyph is the same size on
@@ -15363,14 +15279,13 @@ static void populateHeltecBottomNav(lv_obj_t *bar, int activeTarget) {
     // apart; it now sits with Help at the right end, where you go deliberately
     // rather than in passing.
     const NavItem kItems[] = {
-        {LV_SYMBOL_HOME,     HELTEC_NAV_HOME,   false, nullptr},
-        {LV_SYMBOL_ENVELOPE, HELTEC_NAV_DM,     false, "(D)"},
+        {LV_SYMBOL_HOME,     HELTEC_NAV_HOME,   nullptr},
+        {LV_SYMBOL_ENVELOPE, HELTEC_NAV_DM,     "(D)"},
         // The node roster, and the packet feed coming in over the air.
-        {navEmojiReady ? kContactIcon : LV_SYMBOL_LIST,
-                             HELTEC_NAV_NODES,  navEmojiReady, "(N)"},
-        {LV_SYMBOL_WIFI,     HELTEC_NAV_LIVE,   false, "(L)"},
-        {LV_SYMBOL_SETTINGS, HELTEC_NAV_CFG,    false, "(C)"},
-        {"?",                HELTEC_NAV_LEGEND, false, nullptr},
+        {LV_SYMBOL_LIST,     HELTEC_NAV_NODES,  "(N)"},
+        {LV_SYMBOL_WIFI,     HELTEC_NAV_LIVE,   "(L)"},
+        {LV_SYMBOL_SETTINGS, HELTEC_NAV_CFG,    "(C)"},
+        {"?",                HELTEC_NAV_LEGEND, nullptr},
     };
 
 #if defined(DEVICE_UI_VERTICAL)
@@ -15438,8 +15353,7 @@ static void populateHeltecBottomNav(lv_obj_t *bar, int activeTarget) {
         // Bigger than the 10 the words used: a glyph carries no letters to
         // read, so it has to be big enough to recognise by shape. Still clears
         // the bar with room for the button's border and padding.
-        lv_obj_set_style_text_font(label,
-                                   kItems[i].emoji ? navEmojiFont : navIconFont, 0);
+        lv_obj_set_style_text_font(label, navIconFont, 0);
         lv_obj_set_style_text_color(label, navTextColor, 0);
         lv_label_set_text(label, kItems[i].icon);
 
@@ -19064,10 +18978,10 @@ static void refreshNodesListRows() {
     }
 
 #if defined(DEVICE_TLORA_PAGER_TFT)
-    const lv_font_t *nodesListFont = emojiFont(&lv_font_montserrat_12);
+    const lv_font_t *nodesListFont = textFallbackFont(&lv_font_montserrat_12);
     const int nodesListRowH = 28;
 #else
-    const lv_font_t *nodesListFont = emojiFont(&lv_font_montserrat_10);
+    const lv_font_t *nodesListFont = textFallbackFont(&lv_font_montserrat_10);
     const int nodesListRowH = 22;
 #endif
 
@@ -20124,14 +20038,6 @@ static void executeNodesActionSelection() {
             sendQuickEmoji(glyph, pid);
             return;
         }
-        if (sel == kMsgActionMoreIdx) {
-            // The curated six are a shortcut, not a ceiling. openEmojiPicker()
-            // reads the tapback target from s_selectedMsgReplyPacketId, which
-            // the caller set when the message was selected.
-            closeNodesActionMenu();
-            openEmojiPicker(/*sendMode=*/true);
-            return;
-        }
         if (sel == kMsgActionReplyIdx) {
             const uint32_t replyId = s_selectedMsgReplyPacketId;
             char preview[kReplyPreviewTextMax + 1];
@@ -20456,14 +20362,19 @@ static void openNodesActionMenuFor(uint32_t nodeId, bool msgMode, uint32_t packe
                                     : lv_color_hex(0xD9E8FF);
 
     // ── Tapback strip (message mode only) ───────────────────────────────────
-    // A single row of glyph cells above the action grid: six curated reactions
-    // and a "..." that hands off to the full emoji tray. They are rows 0..6 of
-    // the same selection space as the buttons below, so arrow keys walk
-    // straight from the reactions into the actions with nothing special here.
+    // A single row of label cells above the action grid: the six curated
+    // reactions. They are rows 0..5 of the same selection space as the buttons
+    // below, so arrow keys walk straight from the reactions into the actions
+    // with nothing special here.
     //
     // #if'd rather than left to the runtime flag: on a board without message
-    // mode these cells can never be built, and this keeps the emoji labels and
-    // their glyph lookups out of the image entirely.
+    // mode these cells can never be built, and this keeps the strip out of the
+    // image entirely.
+    //
+    // Labels, not glyphs: kTapbackTray holds the wire codepoints and the device
+    // has no emoji face to draw them with, so the cells show the ASCII
+    // stand-ins from kTapbackLabel instead. The wire form still goes out raw
+    // (see sendQuickEmoji), which is what other clients match against.
 #if HAS_MESSAGE_ACTIONS
     if (s_nodesActionMsgMode) {
         lv_obj_t *tapRow = lv_obj_create(s_nodesActionModal);
@@ -20478,7 +20389,7 @@ static void openNodesActionMenuFor(uint32_t nodeId, bool msgMode, uint32_t packe
         lv_obj_set_flex_align(tapRow, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
                               LV_FLEX_ALIGN_CENTER);
 
-        for (int i = 0; i <= kMsgActionMoreIdx; i++) {
+        for (int i = 0; i < kTapbackTrayCount; i++) {
             lv_obj_t *cell = lv_btn_create(tapRow);
             s_nodesActionRows[i] = cell;
             lv_obj_set_flex_grow(cell, 1);
@@ -20490,12 +20401,10 @@ static void openNodesActionMenuFor(uint32_t nodeId, bool msgMode, uint32_t packe
                                 (void *)(intptr_t)i);
 
             lv_obj_t *lbl = lv_label_create(cell);
-            // Emoji face: montserrat has no glyphs for these and would draw tofu.
-            lv_obj_set_style_text_font(lbl, emojiFont(&lv_font_montserrat_16), 0);
+            lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
             lv_obj_set_style_text_color(lbl, rowTextColor, 0);
             lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-            setLabelTextEmojiSafe(lbl, (i == kMsgActionMoreIdx) ? "..."
-                                                                : kTapbackTray[i]);
+            lv_label_set_text(lbl, kTapbackLabel[i]);
             lv_obj_center(lbl);
         }
     }
@@ -25491,7 +25400,7 @@ static void openNodesModal() {
     // values ellipsized down to nothing. This is what the M9 renders on the same
     // 320x240 panel the T-Deck has, and it is the size the tables were laid out
     // against. The Cardputer, on its own layout, was already using it.
-    const lv_font_t *nodesDetailFont = emojiFont(&lv_font_montserrat_10);
+    const lv_font_t *nodesDetailFont = textFallbackFont(&lv_font_montserrat_10);
 
 #if NODES_LAYOUT_WIDE
     // The list is on the left now and carries long names, so it gets a real
@@ -26058,7 +25967,6 @@ static void openLegendModal() {
         "(C) Configuration\n"
         "(N) Nodes\n"
         "(L) Live (C clears log)\n"
-        "(E) Emoji\n"
         "(H) Help\n"
         "(Space) Compose/Reply\n"
         "(Enter) Focus Messages");
@@ -26069,7 +25977,6 @@ static void openLegendModal() {
         "(C) Configuration\n"
         "(N) Nodes\n"
         "(L) Live (C clears log)\n"
-        "(E) Emoji\n"
         "(H) Help\n"
         "(Space) Compose/Reply\n"
         "(Enter) Focus Messages");
@@ -26120,7 +26027,6 @@ static void openLegendModal() {
         "(C) Configuration\n"
         "(N) Nodes\n"
         "(L) Live (C clears log)\n"
-        "(E) Emoji\n"
         "(H) Help\n"
         "(Space) Compose/Reply\n"
         "(Enter) Focus Messages\n"
@@ -29988,7 +29894,7 @@ static void pumpKeyboardInput() {
                     case KEY_SYMBOL:
                         // Mesh Deck's symbol key. Insert-mode tray, so the
                         // picked character lands in the box being typed.
-                        openEmojiPicker(/*sendMode=*/false, /*symbolTray=*/true);
+                        openSymbolPicker();
                         break;
                     case KEY_BACKSPACE:
                     case KEY_BACKSPACE_HOLD:
@@ -30117,13 +30023,6 @@ static void pumpKeyboardInput() {
                 // here (openDmDeleteConfirm). Inert on the "New DM" row and
                 // while the message pane holds focus.
                 dmRequestDeleteSelectedConversation();
-                continue;
-            }
-
-            if ((k == 'e' || k == 'E') && s_dmSelection > 0) {
-                // Quick emoji: picking sends a one-emoji DM to the selected
-                // conversation (see sendQuickEmoji / emojiPickerActivate).
-                openEmojiPicker(true);
                 continue;
             }
 
@@ -30307,7 +30206,7 @@ static void pumpKeyboardInput() {
                     case KEY_SYMBOL:
                         // Mesh Deck's symbol key. Insert-mode tray, so the
                         // picked character lands in the box being typed.
-                        openEmojiPicker(/*sendMode=*/false, /*symbolTray=*/true);
+                        openSymbolPicker();
                         break;
                     case KEY_BACKSPACE:
                     case KEY_BACKSPACE_HOLD:
@@ -31103,10 +31002,6 @@ static void pumpKeyboardInput() {
                 openCfgModal();
             } else if (k == 'n' || k == 'N') {
                 openNodesModal();
-            } else if (k == 'e' || k == 'E') {
-                // Quick emoji: opens the tray; picking sends a one-emoji message
-                // to the active channel (see sendQuickEmoji / emojiPickerActivate).
-                openEmojiPicker(true);
             } else if (k == 'h' || k == 'H') {
 #if UI_TOUCH_ONLY_PROFILE
                 openLegendModal();
@@ -31197,7 +31092,7 @@ static void pumpKeyboardInput() {
                 // Mesh Deck's symbol key, main-screen compose. This is the
                 // compose the space bar opens from the chat view — the DM and
                 // Nodes screens each have their own copy of this switch.
-                openEmojiPicker(/*sendMode=*/false, /*symbolTray=*/true);
+                openSymbolPicker();
                 break;
             case KEY_BACKSPACE:
             case KEY_BACKSPACE_HOLD:
@@ -37879,7 +37774,7 @@ void setup() {
     // v9 dropped the LV_TICK_CUSTOM compile-time hook; the tick source is
     // installed here instead. Must happen before the first lv_timer_handler().
     lv_tick_set_cb((lv_tick_get_cb_t)millis);
-    emojiFontInit();   // build emoji-fallback text faces before any UI
+    textFallbackFontInit();   // build fallback text faces before any UI
 #if HAS_STATE_MAPS
     nodesMapInitFsDriver();
 #endif

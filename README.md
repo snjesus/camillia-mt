@@ -72,17 +72,28 @@ The Config screen's **Choose WiFi** list includes an **AP** entry that forces th
 
 Export or import a full YAML configuration file via the **CFG** tab. The file is read from and written to `/camillia/config.yaml` on the microSD card.
 
-### CJK fallback
+### 中文字库（CJK fallback）
 
-Text rendered through `emojiFont()` walks the chain **Montserrat → emoji → CJK**, so Chinese characters in node names, channel names, channel chat messages, DM previews, and DMs render inline alongside Latin and emoji without per-call-site handling. The CJK font is generated from [Noto Sans SC](https://github.com/notofonts/noto-cjk) (SIL OFL 1.1) by `tools/gen_cjk_font.py`, which subs to the **top-1,500 frequency-ranked** Simplified-Chinese characters plus CJK punctuation and fullwidth forms (~0.30 MB flash after layout-table stripping; ~94-95% coverage of everyday text). Generated output lands in `src/fonts/cjk_font.h`.
+中文渲染链：**Montserrat → 思源黑体（CJK）**。节点名、频道名、聊天消息、私信预览与正文中的中文都与英文一样内联显示，无需逐处处理。
 
-The size cap is hard: every profile shares the same dual-OTA partition layout with 3.125 MB app slots, and the emoji font already leaves less than ~420 KB of headroom on the tightest boards. A 5,000-character subset compiles but overflows the linker's size gate on every board (measured: tdeck 119%, Cardputer 113%). Resubset if you want to expand or shrink the character set — rebuild alone is enough, no flash layout changes; see the tool's docstring for the commands and trade-offs. Regenerate with:
+字库由 `tools/gen_cjk_font.py` 从思源黑体 SC（Source Han Sans SC，SIL OFL 1.1）子集化生成，字集按[现代汉语字频表（Jun Da）](https://lingua.mtsu.edu/chinese-computing/statistics/char/list.php)排序，外加 CJK 标点与全角符号。分两档：
+
+| 档位 | 内容 | 体积 | 适用机型 |
+|------|------|------|----------|
+| 全量 `src/fonts/cjk_font.h` | 9,903 字 + 标点（约 99.9% 覆盖） | ~2.4 MB | 16MB 机型（含 T-Lora Pager），OTA 槽已扩至 ~5 MB |
+| 小档 `src/fonts/cjk_font_small.h` | 7,000 字 + 标点（约 99.6% 覆盖） | ~1.6 MB | Cardputer（8MB 闪存），OTA 槽扩至 3.75 MB |
+
+emoji 表情已完全移除（字体、面板、快捷键一并删除），腾出的空间全部留给中文字库。表情回应（tapback）的收发保持兼容：设备上以 `[+]` `[-]` `[!!]` `[?]` `[lol]` `:(` 文本样式显示，网页端与其他客户端之间仍收发原图标。
+
+**升级须知：从 v4.7.x 或更早版本升级，必须用 USB 全量刷写出厂镜像**（例如 `dist/camillia-mt-cardputer-cap-v4.8.0.bin`）。本版本扩大了 OTA 应用槽（3.125MB → 16MB 机型约 5MB / Cardputer 3.75MB），分区表变更无法通过 OTA 迁移；全量刷写一次后，设备间 OTA 恢复正常。T-Lora Pager 的内部 LittleFS 备用存储随分区表缩小，首次挂载时会自动重建。
+
+重新生成字库：
 
 ```bash
-python3 tools/gen_cjk_font.py path/to/NotoSansSC-Regular.otf [N]
+python3 tools/gen_cjk_font.py path/to/SourceHanSansSC-Regular.otf [N] [out.h]
 ```
 
-The script embeds the frequency-ranked top-2,000 characters; keep tdeck's worst case under ~97% of the 3,276,800-byte app slot when raising `N`.
+默认输出全量 `src/fonts/cjk_font.h`；`N` 截取前 N 个高频字，第三个参数指定输出文件（如 `src/fonts/cjk_font_small.h`）。工具 docstring 里有各档位与分区表的详细说明。
 
 ### Pinyin IME (compose screen)
 
@@ -98,8 +109,6 @@ The engine ([src/pinyin_ime.cpp](src/pinyin_ime.cpp)) binary-searches a flash-re
 ```bash
 python3 tools/gen_pinyin_ime.py path/to/pinyin_simp.dict.yaml
 ```
-
-Measured impact: cardputer-cap 90.3% → **90.9%**, tdeck 96.4% → **97.0%** of the 3.125 MB app slot.
 
 ## Releases
 

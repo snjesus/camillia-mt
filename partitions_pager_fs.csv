@@ -2,16 +2,19 @@
 # Dual-slot OTA layout for the 16MB T-LoRa Pager:
 #   The LittleFS storage fallback pulled the whole LittleFS/VFS layer into the
 #   link, so the 3.125MB slots from partitions.csv no longer fit. Both OTA
-#   slots grow to 3.5MB (kept equal so in-field updates still work), NVS and
-#   coredump keep their sizes, and the remaining flash becomes a LittleFS
-#   partition used when the SD card can't be mounted.
+#   slots grow to match partitions.csv (0x4E0000 each, sized for the full
+#   9,903-character CJK fallback face), NVS and coredump keep their sizes, and
+#   the remaining flash becomes a LittleFS partition used when the SD card
+#   can't be mounted (6.06 MB, down from 8.8 MB in the 3.5MB-slot table).
 #
-#   NOTE: firmware ≥ this table no longer fits the old 3.125MB slots — devices
-#   must move to this table via a full USB flash of the factory image (the
-#   merged .bin writes it at 0x8000), after which on-device OTA keeps working.
+#   NOTE: firmware ≥ this table no longer fits the old 3.125MB/3.5MB slots —
+#   devices must move to this table via a full USB flash of the factory image
+#   (the merged .bin writes it at 0x8000), after which on-device OTA keeps
+#   working. The LittleFS volume shrinks with the table; its contents are
+#   re-created (re-formatted) on first mount after the move.
 otadata,  data, ota,     0x9000,   0x2000,
-app0,     app,  ota_0,   0x10000,  0x380000,
-app1,     app,  ota_1,   0x390000, 0x380000,
-nvs,      data, nvs,     0x710000, 0x10000,
-coredump, data, coredump,0x720000, 0x10000,
-littlefs, data, spiffs,  0x730000, 0x8D0000,
+app0,     app,  ota_0,   0x10000,  0x4E0000,
+app1,     app,  ota_1,   0x4F0000, 0x4E0000,
+nvs,      data, nvs,     0x9D0000, 0x10000,
+coredump, data, coredump,0x9E0000, 0x10000,
+littlefs, data, spiffs,  0x9F0000, 0x610000,

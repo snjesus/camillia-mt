@@ -846,31 +846,16 @@ available on every build, including the Cardputer.
 
 ### Emoji
 
-Received emoji render as monochrome glyphs inline with the message text, on
-every build. Coverage is broad — the firmware carries the full Noto Emoji set
-(~1,500 glyphs) as a flash-resident font, drawn at the current text size. Two
-notes on the monochrome approach:
+The device no longer carries an emoji font — its flash went to the full
+Simplified-Chinese face (see the 中文字库 section in the README). Emoji that
+arrive in messages render as ASCII stand-ins where one exists (`[+]` for 👍,
+`[-]` for 👎, `<3`, `[lol]`, `:(`, `[?]`…) and as the missing-glyph box
+otherwise.
 
-- Emoji are **single-color**, matching the surrounding text — not full color.
-- Multi-part sequences aren't combined: a skin-tone or variation selector is
-  dropped to the base emoji, and a family/flag ZWJ sequence shows its component
-  emoji side by side. Each piece still renders.
-
-To **send** an emoji from the device, use the quick-emoji tray. On keyboard
-builds (T-Deck, Pager, Cardputer), from the chat or DM screen — **not** while
-composing a message — press **E**. A tray of common emoji opens: move the
-selection and press Enter (or tap) to **send that emoji immediately** as a
-one-glyph message, then the tray closes. On the channel view it goes to the
-active channel; on the DM view it goes to the selected conversation. A close key
-or a tap outside dismisses the tray without sending.
-
-- **T-Deck / Pager / Cardputer** — press **E** on the chat/DM screen
-- **Heltec (touch)** — while composing, tap the 😀 button next to Cancel / Send
-  to insert emoji into the message. The tray has a **Close** button along its
-  bottom edge: it fills all but a few pixels of the screen, so the tap-outside
-  gesture the other builds rely on has almost nothing left to aim at
-
-The web-config composer can also send any emoji your browser can type.
+Sending an emoji from the device is gone too: the quick-emoji tray (**E**) and
+the 😀 compose button were removed along with the font. The web-config composer
+can still send any emoji your browser can type, and reactions (below) still go
+out over the mesh as their original glyphs.
 
 ### Message Actions
 
@@ -882,15 +867,16 @@ ways:
 - **Touch** (T-Deck, Mesh Deck, Heltec) — tap and hold the message.
 
 **Not on the Cardputer.** That board has no PSRAM and a small LVGL pool — the
-same headroom that caps its emoji tray and leaves Discovery out — so Enter on a
-highlighted message there opens the plain Node Actions menu instead. Reactions
-are still reachable on Cardputer through the quick-emoji tray (**E**).
+same headroom that leaves Discovery out — so Enter on a highlighted message
+there opens the plain Node Actions menu instead. Reactions from the web config
+still arrive on a Cardputer and display as the ASCII stand-ins above.
 
 The menu is titled `Message Actions: <sender>` and holds:
 
-- **A row of six reactions** — 👍 👎 ‼️ ❓ 😂 😢 — plus `...` for the full emoji
-  tray. Picking one sends it immediately and closes the menu. Keys **1**–**6**
-  fire the reactions, **M** opens the full tray.
+- **A row of six reactions** — 👍 👎 ‼️ ❓ 😂 😢 on the wire, shown on the device
+  as the ASCII stand-ins `[+]` `[-]` `[!!]` `[?]` `[lol]` `:(`. Picking one
+  sends it immediately and closes the menu. Keys **1**–**6** fire the
+  reactions.
 - **Reply** (**R**) — opens compose quoting that message, the same thing Space
   does on a highlighted message.
 - The six node actions for the **sender**: Traceroute (**T**), Send DM (**D**),
@@ -1408,7 +1394,7 @@ Primary usage is touch.
 - **The USER button is the Enter key's stand-in, and it always does what a tap
   on that screen does**: compose on the chat screen, run the highlighted row on
   Config, open a node's actions on Nodes, run the highlighted entry in an
-  actions menu, send the highlighted emoji in the tray, start the DM in the New
+  actions menu, start the DM in the New
   DM picker, mute in Channel Actions
 - Use on-screen touch lists and buttons inside each modal
 - Tapping a Config row runs that action; tapping a node on the Nodes screen
@@ -1416,7 +1402,7 @@ Primary usage is touch.
 - **Every popup that a keyboard build closes with Backspace has an X in its
   top-right corner here instead** — the same button, in the same place, on
   every one of them: Channels, Device Info, Action Result, Help, Release Notes,
-  Bluetooth Keyboard, the emoji tray, Channel Actions, the Tools and Live
+  Bluetooth Keyboard, the symbol tray, Channel Actions, the Tools and Live
   Filter pickers, Locate, Line of Sight, the traceroute progress popup, the New
   DM node picker and the hidden system-stats screen. The full-screen tools —
   the SNR/RSSI and Channel Utilization charts, Beacons, Discovery and the MQTT

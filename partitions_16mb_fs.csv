@@ -1,14 +1,19 @@
 # Name,   Type, SubType, Offset,   Size,    Flags
 # 16 MB layout with an internal filesystem, for boards with no SD card slot.
 #
-# Identical to partitions.csv through coredump so an OTA between the two
-# layouts keeps the same app slots and NVS; the only addition is the trailing
-# littlefs partition filling the rest of the 16 MB part.
+# Same app-slot geometry as partitions.csv (0x4E0000 each, sized for the full
+# 9,903-character CJK fallback face) plus a trailing littlefs partition filling
+# the rest of the 16 MB part. The littlefs is the DM-history/export fallback on
+# boards without an SD card.
 #
-# 0x670000 + 0x990000 = 0x1000000 (16 MB exactly).
+# 0x9F0000 + 0x610000 = 0x1000000 (16 MB exactly).
+#
+#   NOTE: firmware ≥ this table no longer fits the old 3.125MB slots — devices
+#   must move to this table via a full USB flash of the factory image (the
+#   merged .bin writes it at 0x8000), after which on-device OTA keeps working.
 otadata,  data, ota,     0x9000,   0x2000,
-app0,     app,  ota_0,   0x10000,  0x320000,
-app1,     app,  ota_1,   0x330000, 0x320000,
-nvs,      data, nvs,     0x650000, 0x10000,
-coredump, data, coredump,0x660000, 0x10000,
-littlefs, data, spiffs,  0x670000, 0x990000,
+app0,     app,  ota_0,   0x10000,  0x4E0000,
+app1,     app,  ota_1,   0x4F0000, 0x4E0000,
+nvs,      data, nvs,     0x9D0000, 0x10000,
+coredump, data, coredump,0x9E0000, 0x10000,
+littlefs, data, spiffs,  0x9F0000, 0x610000,

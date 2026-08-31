@@ -1,9 +1,18 @@
 # Name,   Type, SubType, Offset,   Size,    Flags
-# Dual-slot OTA layout (fits 8MB+ flashes):
-#   app0/app1 are equal-size slots for safe in-field updates.
+# Dual-slot OTA layout for 16 MB flashes:
+#   app0/app1 are equal-size slots for safe in-field updates. Slots are sized
+#   for the full 9,903-character CJK fallback face (cjk_font.h, ~2.4 MB) plus
+#   the largest board's code (square, ~2.4 MB) with headroom.
 #   SPIFFS is intentionally omitted (unused in this project).
+#
+#   NOTE: firmware ≥ this table no longer fits the old 3.125MB slots — devices
+#   must move to this table via a full USB flash of the factory image (the
+#   merged .bin writes it at 0x8000), after which on-device OTA keeps working.
+#   cardputer-cap (the one 8 MB flash) uses partitions_cardputer.csv instead —
+#   its slots cap at 0x3C0000 and it carries the smaller CJK face
+#   (cjk_font_small.h).
 otadata,  data, ota,     0x9000,   0x2000,
-app0,     app,  ota_0,   0x10000,  0x320000,
-app1,     app,  ota_1,   0x330000, 0x320000,
-nvs,      data, nvs,     0x650000, 0x10000,
-coredump, data, coredump,0x660000, 0x10000,
+app0,     app,  ota_0,   0x10000,  0x4E0000,
+app1,     app,  ota_1,   0x4F0000, 0x4E0000,
+nvs,      data, nvs,     0x9D0000, 0x10000,
+coredump, data, coredump,0x9E0000, 0x10000,

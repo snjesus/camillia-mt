@@ -103,10 +103,11 @@
 #define LV_CACHE_DEF_SIZE (512U * 1024U)
 #endif
 
-// Monochrome emoji rendering: stb_truetype rasterizes glyphs from a flash-
-// resident Noto Emoji face on demand, wired in as the Montserrat fallback font
-// (see src/emoji_font.*). FILE_SUPPORT stays off — the face is baked in, so no
-// filesystem dependency and it works identically on every board.
+// On-demand glyph rasterization for the CJK fallback face: stb_truetype
+// rasterizes glyphs from a flash-resident Source Han Sans SC subset on demand,
+// wired in as the Montserrat fallback font (see src/text_fallback.*).
+// FILE_SUPPORT stays off — the face is baked in, so no filesystem dependency
+// and it works identically on every board.
 #define LV_USE_TINY_TTF 1
 #define LV_TINY_TTF_FILE_SUPPORT 0
 

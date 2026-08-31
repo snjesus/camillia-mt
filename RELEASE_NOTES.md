@@ -1,14 +1,11 @@
-### New
-- Map settings page now has a "Map download debug" panel that records each tile attempt and its result, with a one-click "Copy report" button for sharing when downloads misbehave.
-- Failed tile downloads now report why they failed — which stage broke, the upstream response, bytes received, and timings — instead of a bare error.
+### 新增
+- 中文字库大幅扩容：16MB 机型（含 T-Lora Pager）内置全量 9,903 字简体中文字库（思源黑体，覆盖约 99.9% 常用汉字）；Cardputer 因 8MB 闪存上限内置 7,000 字（覆盖约 99.6%）。节点名、频道名、聊天消息、私信均可内联显示中文。
+- 应用分区（OTA 槽位）随之扩大：16MB 机型扩到约 5MB，Cardputer 扩到 3.75MB。
 
-### Changed
-- Map tile downloads retry each tile up to three times and keep going past a failed tile, rather than stopping the whole run at the first error.
-- If a tile download appears to fail but was actually written to the device, the page now re-checks storage and counts it as saved instead of reporting a failure.
-- After five tiles in a row can't be confirmed, the download pauses and says so, keeping every tile already saved.
-- Offline map status is checked in much smaller batches, so the check is far less likely to time out over a weak Wi-Fi link.
-- The map download summary now reads in plain terms — tiles "stored on the device" and "remaining" instead of cache jargon — and confirms explicitly when everything at the chosen zoom is already stored.
+### 变更
+- 移除 emoji 表情字体与表情面板（输入框 😀 按钮、快速表情 'E' 键一并移除），腾出的空间全部用于中文字库。
+- 表情回应（tapback）收发保持兼容：设备上以 [+]/[-]/[!!]/[?]/[lol]/:( 等文本样式显示，网页端仍显示原图标，与其他客户端互通不受影响。
+- 首次升级到本版本必须通过 USB 全量刷写出厂镜像（分区表变更，无法 OTA 迁移）；此后设备间 OTA 恢复正常。
 
-### Fixed
-- The web config page no longer renders as garbled text or stray tag fragments when Wi-Fi is slow; page data is now written to the connection in a way that can't desynchronize the browser mid-page.
-- Closing or navigating away from the config page while it is still loading now ends the transfer immediately instead of leaving the device building a page nobody is reading.
+### 修复
+- 修复 square 配置从未参与完整编译而漏掉的一处代码错误（分页器音频探测引用了仅分页器声明的寄存器变量）。

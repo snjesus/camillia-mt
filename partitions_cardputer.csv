@@ -1,0 +1,15 @@
+# Name,   Type, SubType, Offset,   Size,    Flags
+# Dual-slot OTA layout for the 8 MB M5Stack Cardputer (StampS3):
+#   cardputer-cap is the one 8 MB flash in the lineup, so it cannot follow
+#   partitions.csv to the ~5 MB slots the 16 MB boards grew for the full CJK
+#   face. The slots here are the largest an 8 MB part can hold while leaving
+#   room for otadata, NVS and coredump: 0x3C0000 (3.75 MB) each. That fits a
+#   7,000-character CJK fallback face (cjk_font_small.h, ~1.6 MB flash) plus
+#   this board's code with ~10% headroom, selected by -DCJK_FONT_SMALL.
+#
+# 0x7A0000 + 0x10000 = 0x7B0000, comfortably inside the 8 MB part.
+otadata,  data, ota,     0x9000,   0x2000,
+app0,     app,  ota_0,   0x10000,  0x3C0000,
+app1,     app,  ota_1,   0x3D0000, 0x3C0000,
+nvs,      data, nvs,     0x790000, 0x10000,
+coredump, data, coredump,0x7A0000, 0x10000,
