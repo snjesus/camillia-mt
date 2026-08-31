@@ -1,10 +1,23 @@
 #include <Arduino.h>
 #include "text_fallback.h"
 #include "config.h"
-// Emoji fallback face, flash-resident (Noto Emoji, monochrome). Since v4.8.3
-// this is a common-400 subset (~207 KB); the full cmap cut was ~776 KB. See
-// tools/gen_emoji_font.py + tools/emoji_common.txt.
+// Emoji fallback face, flash-resident (Noto Emoji, monochrome). Two cuts ship
+// (selected via platformio.ini build_flags — see CJK_FONT_SMALL pairing):
+//   default              — 400-common subset (~212 KB), for 16 MB boards whose
+//                          ~5 MB OTA slot already holds the full 9,903-char CJK
+//                          face and adding ~776 KB of full emoji would blow the
+//                          slot ceiling by >400 KB.
+//   -DEMOJI_FONT_FULL    — the full Noto Emoji cmap (all 1489 renderable
+//                          codepoints, ~776 KB). Cardputer pairs it with the
+//                          5,000-char CJK small face (flash 99.1 %, ~34 KB
+//                          headroom). ZWJ ligatures and regional-indicator flag
+//                          pairs still need GSUB (we strip layout tables), so
+//                          those composite sequences never render regardless.
+#if defined(EMOJI_FONT_COMPACT)
+#include "fonts/emoji_font_compact.h"
+#else
 #include "fonts/emoji_font.h"
+#endif
 // CJK fallback face, flash-resident. Two cuts ship (see tools/gen_cjk_font.py):
 //   default          — the full 9,903-character list, for the 16 MB boards
 //                      whose OTA slots grew to ~5 MB to hold it

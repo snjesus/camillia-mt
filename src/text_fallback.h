@@ -13,7 +13,9 @@
 // History: this module was named emoji_font.* and carried only the emoji face
 // until v4.8.0, which dropped that face and renamed the module for the CJK-only
 // era (v4.8.0-v4.8.2). v4.8.3 brought the emoji face back — as a common-400
-// subset — and re-chained it in front of the CJK face.
+// subset — and re-chained it in front of the CJK face. v4.8.4 expanded the
+// emoji face to the full Noto Emoji cmap (all 1489 renderable glyphs, ~776 KB)
+// and trimmed the Cardputer CJK face to stay within slot.
 #include <stdint.h>
 #include <lvgl.h>
 

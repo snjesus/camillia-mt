@@ -5,7 +5,11 @@
 // Release notes for the build this firmware was cut from, shown by the
 // Release Notes entry in the config screen. Empty when no notes were
 // available at build time (a plain dev build, typically).
-static const char RELEASE_NOTES_TEXT[] = R"CAMNOTES(v4.8.3
+static const char RELEASE_NOTES_TEXT[] = R"CAMNOTES(v4.8.4
+- Emoji 字库补全到 Noto Emoji 全量可渲染集合（1,489 个码位，约 776KB，覆盖表情/符号/天气/交通/食物/动植物/旗帜字符等），Cardputer 闪存在补齐后占用约 99.1%（余量约 34KB）。之前仅 400 常用表情时未命中的表情现在大多可正常渲染；ZWJ 组合表情与国旗符号仍不显示（字库去掉了 GSUB 表）。
+- Cardputer 中文字库维持 5,000 字不变；16MB 机型保持全量 9,903 字 + 全量 emoji。
+
+v4.8.3
 - emoji 回归：重新内置 400 个常用表情字体（约 207KB，为 v4.8.0 全量字库的约 1/4 大小）。输入框 😀 按钮、快速表情 'E' 键恢复；聊天、私信、节点名、频道名中的 emoji 与中文均可内联混排显示。
 - 表情回应（tapback）在设备上重新显示为真实 emoji 图标；字库未覆盖的表情仍回退为 [+]/[-]/[!!] 等文本样式，收发与其他客户端互通不受影响。
 - 中文字库按需精简：Cardputer 从 7,000 字精简到 5,000 字（覆盖约 99% 日常用字），16MB 机型维持全量 9,903 字不变。精简后 Cardputer 固件占用从 98.9% 降至 84.7%，OTA 余量恢复健康水平。

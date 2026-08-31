@@ -23,11 +23,10 @@ a factory image; after that, on-device OTA keeps working.
 cardputer-cap is the exception: it is the one 8 MB flash and cannot take two
 ~5 MB slots. It uses partitions_cardputer.csv (0x3C0000 slots, the most an
 8 MB part allows) and carries a 5,000-character face (cjk_font_small.h,
-selected by -DCJK_FONT_SMALL in platformio.ini) — trimmed from 7,000 in
-v4.8.3 to make room for the returning common-400 emoji face.
-
-Pass N (and an output path) to cut a smaller face if flash pressure ever
-returns; rare characters render as the missing-glyph box.
+selected by -DCJK_FONT_SMALL in platformio.ini) — paired with the full
+1,489-codepoint Noto Emoji cmap (~776 KB) since v4.8.4, which leaves just
+over 30 KB of headroom in the slot (flash 99.1 %). Trim N if flash pressure
+ever returns.
 
 Drops the layout tables tiny_ttf can't use (GSUB/GPOS/GDEF/morx/kern/FFTM/MATH).
 
