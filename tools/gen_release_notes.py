@@ -27,9 +27,10 @@ MAX_BYTES = 4096
 # literal early, so that sequence is neutralised below.
 DELIM = "CAMNOTES"
 
-# The compiled Montserrat faces are ASCII-only, so smart punctuation would
-# render as blank boxes on the device. Fold the characters an LLM actually
-# reaches for; anything else non-ASCII is dropped by the filter further down.
+# Smart punctuation an LLM reaches for is missing from the compiled faces
+# (Montserrat is ASCII-only), so fold it. The full CJK fallback added in
+# v4.8.0 (text_fallback) means Chinese notes render fine, but these fold
+# entries are still dropped-mapped for the chars CJK faces also lack.
 UNICODE_FOLD = {
     "—": "-",   # em dash
     "–": "-",   # en dash
@@ -38,7 +39,7 @@ UNICODE_FOLD = {
     "“": '"',   # left double quote
     "”": '"',   # right double quote
     "…": "...",
-    " ": " ",   # non-breaking space
+    " ": " ",   # non-breaking space
     "•": "-",   # bullet
     "→": "->",
 }
@@ -51,6 +52,11 @@ def load_notes():
         return handle.read()
 
 
+# The Montserrat faces are ASCII-only, but v4.8.0 added a full CJK fallback
+# (text_fallback), so Chinese notes render fine. Smart punctuation an LLM
+# reaches for is folded above since it is missing from both faces; anything
+# else non-ASCII outside the faces still risks tofu, but dropping whole
+# sentences of Chinese (the notes are written in Chinese now) is worse.
 def clean(text):
     text = text.replace("\r\n", "\n").replace("\r", "\n")
 
@@ -62,8 +68,8 @@ def clean(text):
         # '### New' reads as noise on a 240px panel; keep the heading text and
         # drop the markdown marker. Bullets and everything else stay verbatim.
         line = re.sub(r"^\s*#{1,6}\s*", "", line)
-        # Drop anything still outside ASCII rather than shipping tofu boxes.
-        line = "".join(ch for ch in line if ch == "\t" or 0x20 <= ord(ch) < 0x7F)
+        # Drop control characters only; keep UTF-8 (CJK) content intact.
+        line = "".join(ch for ch in line if ch == "\t" or ord(ch) >= 0x20 or ch == "\n")
         out_lines.append(line.rstrip())
 
     text = "\n".join(out_lines).strip("\n")

@@ -8339,7 +8339,11 @@ static void openComposePrompt(uint32_t replyPacketId,
     // the composeInputHost); they have no growing input so the order there
     // does not matter either way.
     composeCreateImeBar(composeInputHost);
-    (void)wubi_ime::ensureInit();   // decompresses the WBI2 table into PSRAM.
+    if (!wubi_ime::ensureInit()) {
+        // Decompresses the WBI2 table into PSRAM; failure (e.g. no PSRAM)
+        // leaves ready() false and every CN-mode letter is swallowed.
+        Serial.printf("[ime] WBI2 table init FAILED - CN input disabled\n");
+    }
 
     s_composeInput = lv_textarea_create(composeInputHost);
     if (!s_composeInput) {
