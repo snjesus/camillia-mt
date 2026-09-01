@@ -83,6 +83,14 @@
 // re-rasterize next time). This is the same reasoning as MEM_INTEGRITY above.
 #define LV_USE_ASSERT_MALLOC 0
 
+// NULL asserts off for the same reason: lv_obj_create (and others) assert on
+// a NULL return from lv_malloc, and the while(1) handler hangs the device
+// before the caller can handle the failure. Combined with MALLOC off, this
+// ensures transient pool exhaustion degrades (missing UI element) rather than
+// freezes. The Cardputer's 80 KB pool makes this a real scenario under WiFi
+// + LVGL + tiny_ttf cache pressure.
+#define LV_USE_ASSERT_NULL 0
+
 // On, at warning level, and routed to Serial by lvglLogToSerial() in
 // main_lvgl.cpp. LVGL reports decode and draw failures through this and nothing
 // else — with it off, a PNG that will not decode simply renders as empty space,

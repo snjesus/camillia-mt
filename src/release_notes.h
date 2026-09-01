@@ -5,7 +5,11 @@
 // Release notes for the build this firmware was cut from, shown by the
 // Release Notes entry in the config screen. Empty when no notes were
 // available at build time (a plain dev build, typically).
-static const char RELEASE_NOTES_TEXT[] = R"CAMNOTES(v4.8.7
+static const char RELEASE_NOTES_TEXT[] = R"CAMNOTES(v4.8.8
+- 修复 Cardputer 内存池耗尽导致设备挂死：80KB LVGL 池无法支撑 10 个 tiny_ttf 实例（5 字号 × emoji + CJK），WiFi 活跃时 `lv_realloc` 失败 -> `lv_obj_create` NULL 断言 -> `while(1)` 死机。Cardputer fallback 槽从 5 减到 3（保留 10/14/16，覆盖默认主屏 + 默认/大号聊天），省 4 个实例约 8KB 池空间。Small (12) 和 XLarge (18) 聊天字号失去 emoji/CJK 回退，显示为方框，不影响正常使用。
+- 同时关闭 `LV_USE_ASSERT_NULL`（与 `LV_USE_ASSERT_MALLOC` 同理：`while(1)` 断言处理器在 NULL 检查之前挂死设备）。瞬时内存不足现在优雅降级而非死机。
+
+v4.8.7
 - 修复 LVGL 内存分配断言导致设备挂死的问题：LVGL 默认的 `LV_USE_ASSERT_MALLOC=1` 配合 `while(1)` 断言处理器，在内存池短暂不足时（如红黑树缓存节点分配失败）会在 NULL 检查之前直接挂死设备。关闭该断言后，同样的瞬时不足会安静返回 NULL，调用链正常降级（缓存跳过本次条目，下次重新光栅化），不再死机。该问题此前被 tiny_ttf 假错误刷屏掩盖，v4.8.6 修复刷屏后暴露。
 - 无功能/字库变化，与 v4.8.6 相同的字体和内存配置。
 
@@ -31,9 +35,6 @@ v4.8.3
 - 未覆盖的生僻字显示为缺字方框；字库可随时用 tools/gen_cjk_font.py 重新生成调整。
 
 v4.8.1
-- 输入法更换为五笔86：编写界面直接用五笔编码输入汉字，内置码表覆盖 7,000 个高频汉字（10,700+ 编码，约 111KB）。一级/二级简码内置：一级简码首字排第一，两键即可取二级简码字；`,`/`.` 翻页、数字 1-3/1-5 选字、空格上屏首选，交互与原拼音输入法一致。Z 不是编码键，按下会直接输入字母 z。码表来自 rime/rime-wubi（wubi86.dict.yaml，LGPL-3.0）。
-
-v4.8.0
-- 中文字库大幅扩容：16MB 机型（含 T-Lora Pager）内置全量 9,903 字简体中文字库（思源黑体，覆盖约 99.9% 常用汉字）；Cardputer 因 8MB 闪存上限内置 7,000 字（覆盖约 99.6%）。节点名、频道名、聊天消息、私信均可内联显示中
+- 输入法更换为五笔86：编写界面直接用五笔编码输入汉字，内置码
 
 [truncated])CAMNOTES";

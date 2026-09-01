@@ -1,3 +1,7 @@
+### v4.8.8
+- 修复 Cardputer 内存池耗尽导致设备挂死：80KB LVGL 池无法支撑 10 个 tiny_ttf 实例（5 字号 × emoji + CJK），WiFi 活跃时 `lv_realloc` 失败 → `lv_obj_create` NULL 断言 → `while(1)` 死机。Cardputer fallback 槽从 5 减到 3（保留 10/14/16，覆盖默认主屏 + 默认/大号聊天），省 4 个实例约 8KB 池空间。Small (12) 和 XLarge (18) 聊天字号失去 emoji/CJK 回退，显示为方框，不影响正常使用。
+- 同时关闭 `LV_USE_ASSERT_NULL`（与 `LV_USE_ASSERT_MALLOC` 同理：`while(1)` 断言处理器在 NULL 检查之前挂死设备）。瞬时内存不足现在优雅降级而非死机。
+
 ### v4.8.7
 - 修复 LVGL 内存分配断言导致设备挂死的问题：LVGL 默认的 `LV_USE_ASSERT_MALLOC=1` 配合 `while(1)` 断言处理器，在内存池短暂不足时（如红黑树缓存节点分配失败）会在 NULL 检查之前直接挂死设备。关闭该断言后，同样的瞬时不足会安静返回 NULL，调用链正常降级（缓存跳过本次条目，下次重新光栅化），不再死机。该问题此前被 tiny_ttf 假错误刷屏掩盖，v4.8.6 修复刷屏后暴露。
 - 无功能/字库变化，与 v4.8.6 相同的字体和内存配置。

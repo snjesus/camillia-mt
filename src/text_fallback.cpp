@@ -49,6 +49,22 @@ struct FallbackSlot {
 // The Montserrat sizes chat/DM/node text is actually drawn at (see main_lvgl
 // scaledChatFont / kMainScreenFont / kChannelChatFont). montserrat_16 is here
 // too because reply previews and some node rows use it.
+//
+// Cardputer (DEVICE_CARDPUTER_LORA_HAT) carries only 3 of the 5 sizes: its
+// 80 KB LVGL pool cannot afford 10 tiny_ttf instances (5 slots × emoji + CJK).
+// The 3 kept are the ones actually drawn at by default: montserrat_10 (main
+// screen / DM list / node rows), montserrat_14 (default Medium chat), and
+// montserrat_16 (Large chat / reply previews). Small (12) and XLarge (18)
+// lose fallback — CJK/emoji at those sizes renders as boxes until the user
+// switches to a size that has a slot. This trades 4 instances (~8 KB of pool)
+// back to the system for WiFi + LVGL objects.
+#if defined(DEVICE_CARDPUTER_LORA_HAT)
+FallbackSlot s_slots[] = {
+    { &lv_font_montserrat_10, 12, {}, nullptr, nullptr, false },
+    { &lv_font_montserrat_14, 16, {}, nullptr, nullptr, false },
+    { &lv_font_montserrat_16, 18, {}, nullptr, nullptr, false },
+};
+#else
 FallbackSlot s_slots[] = {
     { &lv_font_montserrat_10, 12, {}, nullptr, nullptr, false },
     { &lv_font_montserrat_12, 14, {}, nullptr, nullptr, false },
@@ -56,6 +72,7 @@ FallbackSlot s_slots[] = {
     { &lv_font_montserrat_16, 18, {}, nullptr, nullptr, false },
     { &lv_font_montserrat_18, 20, {}, nullptr, nullptr, false },
 };
+#endif
 constexpr int kSlotCount = (int)(sizeof(s_slots) / sizeof(s_slots[0]));
 
 // Per-instance glyph cache budget, in BYTES.
