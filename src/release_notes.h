@@ -5,7 +5,12 @@
 // Release notes for the build this firmware was cut from, shown by the
 // Release Notes entry in the config screen. Empty when no notes were
 // available at build time (a plain dev build, typically).
-static const char RELEASE_NOTES_TEXT[] = R"CAMNOTES(v4.8.5
+static const char RELEASE_NOTES_TEXT[] = R"CAMNOTES(v4.8.6
+- 修复 LVGL tiny_ttf 对"字体中没有的字符"误报 `cache not allocated` 错误的问题：该字不属于此字体时本应安静回退，但 LVGL 9.5.0 会把它当成"缓存未分配"打出一条 ERROR。回退链中每个汉字都会先在 emoji 字库落空一次，因此屏幕唤醒重绘时串口被刷屏（一次约 1,650 行），UI 刷新也被同步日志拖慢到约 1 秒；中文显示本身不受影响。
+- 通过构建前补丁（tools/patch_lvgl_tiny_ttf.py）修正：缺字时直接查询字体并安静返回 false；字在而缓存分配失败时退化为无缓存直查路径。渲染结果与此前完全一致，仅消除假错误与日志开销。该问题自 v4.8.3 引入 emoji 中间层起即存在。
+- 无功能变化，字库与内存配置与 v4.8.5 相同。
+
+v4.8.5
 - Pager emoji 字库升级为 Noto Emoji 全量可渲染集合（1,489 个码位，约 776KB），与 Cardputer 同级：表情、手势、符号、天气、交通、食物、动植物、箭头等均可渲染。
 - 为容纳全量 emoji，Pager（及其他 16MB 机型）的中文字库从 9,903 字精简到 7,000 字（覆盖约 99.3% 日常用字），精简出的空间远大于 emoji 增量，固件占用约 93%（余量约 345KB）。
 - Cardputer 维持 v4.8.4 配置不变：全量 emoji + 5,000 字中文（99.1%）。
@@ -29,5 +34,6 @@ v4.8.0
 - 应用分区（OTA 槽位）随之扩大：16MB 机型扩到约 5MB，Cardputer 扩到 3.75MB。
 - 移除 emoji 表情字体与表情面板（输入框 😀 按钮、快速表情 'E' 键一并移除），腾出的空间全部用于中文字库。
 - 表情回应（tapback）收发保持兼容：设备上以 [+]/[-]/[!!]/[?]/[lol]/:( 等文本样式显示，网页端仍显示原图标，与其他客户端互通不受影响。
-- 首次从 v4.7.x 或更早版本升级必须通过 USB 全量刷写出厂镜像（分区表变更，无法 OTA 迁移）；此后设备间 OTA 恢复正常。
-- 修复 square 配置从未参与完整编译而漏掉的一处代码错误（分页器音频探测引用了仅分页器声明的寄存器变量）。)CAMNOTES";
+- 首次从 v4.7.x 或更早版本升级必须通过 USB 全量刷写出厂镜像（分区表变更，无法 OTA 迁移）；此后设备
+
+[truncated])CAMNOTES";
