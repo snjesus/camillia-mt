@@ -75,6 +75,14 @@
 // transient pool pressure can otherwise force hard abort/reboot paths.
 #define LV_USE_ASSERT_MEM_INTEGRITY 0
 
+// MALLOC asserts off too: LVGL's default handler is while(1), so a transient
+// pool shortage during cache-node allocation (rb_create_node in lv_rb.c) hangs
+// the device BEFORE the NULL check that follows every LV_ASSERT_MALLOC can run.
+// All allocation sites in LVGL have proper NULL returns after the assert, so
+// disabling it turns a fatal hang into graceful degradation (cache miss →
+// re-rasterize next time). This is the same reasoning as MEM_INTEGRITY above.
+#define LV_USE_ASSERT_MALLOC 0
+
 // On, at warning level, and routed to Serial by lvglLogToSerial() in
 // main_lvgl.cpp. LVGL reports decode and draw failures through this and nothing
 // else — with it off, a PNG that will not decode simply renders as empty space,
